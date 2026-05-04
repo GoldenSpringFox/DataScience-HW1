@@ -9,6 +9,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 import math
 import json
+import re
 
 def fetch_with_selenium(url):
     """Fetch page using Selenium with anti-bot detection options"""
@@ -18,6 +19,8 @@ def fetch_with_selenium(url):
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
+    chrome_options.add_argument("--window-position=-2000,-2000")  # Position window off-screen
+    chrome_options.add_argument("--window-size=800,600")  # Set a reasonable window size
     
     service = Service()
     driver = webdriver.Chrome(service=service, options=chrome_options)
@@ -34,7 +37,7 @@ def fetch_with_selenium(url):
     finally:
         driver.quit()
 
-def parse_books(html_content, category_name):
+def parse_books(html_content, category_name, page_num=None, total_pages=5):
     """Parse the HTML content and extract book information"""
     soup = BeautifulSoup(html_content, 'html.parser')
     product_divs = soup.find_all('div', class_=lambda x: x and 'box-producto' in x)
@@ -50,6 +53,7 @@ def parse_books(html_content, category_name):
         # Convert relative URLs to absolute
         if book_url and book_url.startswith('/'):
             book_url = f"https://www.bookdelivery.com{book_url}"
+        book['URL'] = book_url if book_url else 'N/A'
         
         # Title
         title_elem = product.find('h3', class_='nombre')
@@ -150,7 +154,8 @@ def parse_books(html_content, category_name):
         
         # Now visit the individual book page to get detailed information
         if book_url:
-            print(f"  {idx}/{len(product_divs)} Visiting book page: {book_url}")
+            page_label = f"(page {page_num}/{total_pages})" if page_num is not None else ""
+            print(f"  {category_name} {page_label} [book {idx}/{len(product_divs)}]: {book_url}")
             book_html = fetch_with_selenium(book_url)
             if book_html:
                 book_soup = BeautifulSoup(book_html, 'html.parser')
@@ -176,15 +181,37 @@ def parse_books(html_content, category_name):
                     book['Synopsis'] = synopsis_text
                     book['Synopsis length'] = len(synopsis_text)
                 
-                # Extract star rating from individual page (more accurate)
-                rating_span = book_soup.find('span', class_=lambda x: x and 'stars' in x and 'stars-' in x)
-                if rating_span:
-                    classes = rating_span.get('class', [])
-                    rating_class = next((cls for cls in classes if cls.startswith('stars-')), None)
-                    if rating_class:
-                        rating = int(rating_class.split('-')[1])
-                        book['StarRating'] = math.ceil(rating * 100) / 100
-                
+                # Extract star rating from individual page using detailed review counts
+                evaluation_ul = book_soup.find('ul', class_='evaluacion')
+                if evaluation_ul:
+                    total_votes = 0
+                    total_score = 0
+                    for rating_value in range(1, 6):
+                        count = 0
+                        li = evaluation_ul.find('li', class_=f'stars-{rating_value}-li')
+                        if li:
+                            count_text = li.get_text(strip=True)
+                            match = re.search(r"\((\d+)\)", count_text)
+                            if match:
+                                count = int(match.group(1))
+                        total_votes += count
+                        total_score += rating_value * count
+
+                    if total_votes > 0:
+                        book['NumberOfReviews'] = total_votes
+                        book['StarRating'] = math.ceil((total_score / total_votes) * 100) / 100
+                    else:
+                        book['StarRating'] = 'None'
+                        book['NumberOfReviews'] = 0
+                else:
+                    rating_span = book_soup.find('span', class_=lambda x: x and 'stars' in x and 'stars-' in x)
+                    if rating_span:
+                        classes = rating_span.get('class', [])
+                        rating_class = next((cls for cls in classes if cls.startswith('stars-')), None)
+                        if rating_class:
+                            rating = int(rating_class.split('-')[1])
+                            book['StarRating'] = math.ceil(rating * 100) / 100
+
                 # Extract dimensions
                 dimensions_div = book_soup.find('div', id='metadata-dimensiones')
                 if dimensions_div:
@@ -258,6 +285,12 @@ def get_next_page_links(html_file_path):
     return links[:4]  # Return first 4 next pages
 
 
+def assign_book_ids(books):
+    for idx, book in enumerate(books, start=1):
+        book['ID'] = idx
+    return books
+
+
 def extract_category_links(soup):
     categories = {}
     category_heading = soup.find('p', class_='subtitulofiltro', string=lambda t: t and t.strip().lower() == 'category')
@@ -329,7 +362,7 @@ def crawl_books(start_category_index=1, start_page_num=1):
             
             if html:
                 # Parse books from this page
-                page_books = parse_books(html, category_name)
+                page_books = parse_books(html, category_name, page_num=page_num, total_pages=5)
                 print(f"    Found {len(page_books)} books on page {page_num}")
                 
                 # Add/update books in the dictionary
@@ -340,7 +373,7 @@ def crawl_books(start_category_index=1, start_page_num=1):
                 category_books.extend(page_books)
                 
                 # Save progress after each page (convert dict to list)
-                all_books_list = list(all_books_dict.values())
+                all_books_list = assign_book_ids(list(all_books_dict.values()))
                 with open(json_file, 'w', encoding='utf-8') as f:
                     json.dump(all_books_list, f, indent=2, ensure_ascii=False)
                 print(f"    Saved progress: {len(all_books_list)} total books")
@@ -360,7 +393,7 @@ def crawl_books(start_category_index=1, start_page_num=1):
             time.sleep(3)
     
     # Final save (convert dict to list)
-    all_books_list = list(all_books_dict.values())
+    all_books_list = assign_book_ids(list(all_books_dict.values()))
     print(f"\nCrawling complete. Total books crawled: {len(all_books_list)}")
     with open(json_file, 'w', encoding='utf-8') as f:
         json.dump(all_books_list, f, indent=2, ensure_ascii=False)
@@ -371,6 +404,6 @@ def crawl_books(start_category_index=1, start_page_num=1):
 # Start crawling
 if __name__ == "__main__":
     import sys
-    start_category = int(sys.argv[1]) if len(sys.argv) > 1 else 1
-    start_page = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+    start_category = 1
+    start_page = 2
     crawl_books(start_category, start_page)
