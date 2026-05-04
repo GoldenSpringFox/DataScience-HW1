@@ -41,8 +41,15 @@ def parse_books(html_content, category_name):
     
     books = []
     
-    for product in product_divs:
+    for idx, product in enumerate(product_divs, start=1):
         book = {}
+        
+        # Extract book URL first
+        book_link = product.find('a', href=True)
+        book_url = book_link['href'] if book_link else None
+        # Convert relative URLs to absolute
+        if book_url and book_url.startswith('/'):
+            book_url = f"https://www.bookdelivery.com{book_url}"
         
         # Title
         title_elem = product.find('h3', class_='nombre')
@@ -51,7 +58,7 @@ def parse_books(html_content, category_name):
         # Category (where crawled from)
         book['Category'] = category_name
         
-        # Categories (comma-separated) - not available in listing, use main category
+        # Categories (comma-separated) - will be filled from individual page
         book['Categories'] = category_name
         
         # Authors
@@ -77,7 +84,7 @@ def parse_books(html_content, category_name):
         usd_price = book['Price in NIS'] / 3.01
         book['Price in USD'] = math.ceil(usd_price * 100) / 100
         
-        # Year, Format, etc. from meta
+        # Year, Format, etc. from meta - will be updated from individual page
         meta_elem = product.find('div', class_='autor color-dark-gray metas hide-on-hover')
         meta_text = meta_elem.get_text(strip=True) if meta_elem else ''
         
@@ -99,11 +106,11 @@ def parse_books(html_content, category_name):
             elif 'sheet music' in part_lower:
                 book['Format'] = 'Sheet Music'
         
-        # Synopsis - not available in listing
+        # Synopsis - will be filled from individual page
         book['Synopsis'] = 'N/A'
         book['Synopsis length'] = 0
         
-        # Star Rating
+        # Star Rating - will be updated from individual page
         stars_elem = product.find('span', class_=lambda x: x and 'stars' in x and 'stars-' in x)
         reviews_elem = product.find('span', class_='color-dark-gray font-weight-light margin-left-5 font-size-small')
         
@@ -131,7 +138,7 @@ def parse_books(html_content, category_name):
             else:
                 book['StarRating'] = 'None'
         
-        # Dimensions, Weight, ISBN - not available in listing
+        # Dimensions, Weight - will be filled from individual page
         book['Dimensions'] = 'N/A'
         book['Dimensions unit'] = 'N/A'
         book['Weight'] = 'N/A'
@@ -140,6 +147,64 @@ def parse_books(html_content, category_name):
         # ISBN
         isbn = product.get('data-isbn')
         book['ISBN/ISBN13'] = isbn if isbn else 'N/A'
+        
+        # Now visit the individual book page to get detailed information
+        if book_url:
+            print(f"  {idx}/{len(product_divs)} Visiting book page: {book_url}")
+            book_html = fetch_with_selenium(book_url)
+            if book_html:
+                book_soup = BeautifulSoup(book_html, 'html.parser')
+                
+                # Extract categories
+                categories_div = book_soup.find('div', id='metadata-categorías')
+                if categories_div:
+                    category_links = categories_div.find_all('a')
+                    categories_list = [link.get_text(strip=True) for link in category_links]
+                    book['Categories'] = ', '.join(categories_list) if categories_list else category_name
+                
+                # Extract year (from metadata)
+                year_div = book_soup.find('div', id='metadata-año')
+                if year_div:
+                    year_text = year_div.get_text(strip=True)
+                    if year_text.isdigit() and len(year_text) == 4:
+                        book['Year'] = year_text
+                
+                # Extract synopsis
+                synopsis_span = book_soup.find('span', id='texto-descripcion')
+                if synopsis_span:
+                    synopsis_text = synopsis_span.get_text(strip=True)
+                    book['Synopsis'] = synopsis_text
+                    book['Synopsis length'] = len(synopsis_text)
+                
+                # Extract star rating from individual page (more accurate)
+                rating_span = book_soup.find('span', class_=lambda x: x and 'stars' in x and 'stars-' in x)
+                if rating_span:
+                    classes = rating_span.get('class', [])
+                    rating_class = next((cls for cls in classes if cls.startswith('stars-')), None)
+                    if rating_class:
+                        rating = int(rating_class.split('-')[1])
+                        book['StarRating'] = math.ceil(rating * 100) / 100
+                
+                # Extract dimensions
+                dimensions_div = book_soup.find('div', id='metadata-dimensiones')
+                if dimensions_div:
+                    dimensions_text = dimensions_div.get_text(strip=True)
+                    # Parse dimensions like "26.2 x 18.8 x 5.1 cm"
+                    if 'x' in dimensions_text and 'cm' in dimensions_text:
+                        book['Dimensions'] = dimensions_text.replace('cm', '').strip()
+                        book['Dimensions unit'] = 'cm'
+                
+                # Extract weight
+                weight_div = book_soup.find('div', id='metadata-peso')
+                if weight_div:
+                    weight_text = weight_div.get_text(strip=True)
+                    # Parse weight like "1.84 kg."
+                    if 'kg' in weight_text:
+                        book['Weight'] = weight_text.replace('kg.', '').replace('kg', '').strip()
+                        book['Weight unit'] = 'kg'
+            
+            # Small sleep between individual book page visits
+            time.sleep(3)
         
         books.append(book)
     
