@@ -34,14 +34,10 @@ def fetch_with_selenium(url):
     finally:
         driver.quit()
 
-def parse_art_books(html_file_path):
-    """Parse the art books HTML file and extract book information"""
-    with open(html_file_path, 'r', encoding='utf-8') as f:
-        html = f.read()
-    
-    soup = BeautifulSoup(html, 'html.parser')
+def parse_books(html_content, category_name):
+    """Parse the HTML content and extract book information"""
+    soup = BeautifulSoup(html_content, 'html.parser')
     product_divs = soup.find_all('div', class_=lambda x: x and 'box-producto' in x)
-    print(f"Found {len(product_divs)} product divs")
     
     books = []
     
@@ -53,10 +49,10 @@ def parse_art_books(html_file_path):
         book['Title'] = title_elem.get_text(strip=True) if title_elem else 'N/A'
         
         # Category (where crawled from)
-        book['Category'] = 'Art Books'
+        book['Category'] = category_name
         
         # Categories (comma-separated) - not available in listing, use main category
-        book['Categories'] = 'Arts'
+        book['Categories'] = category_name
         
         # Authors
         author_elem = product.find('div', class_='autor')
@@ -149,6 +145,34 @@ def parse_art_books(html_file_path):
     
     return books
 
+def get_categories_from_homepage():
+    """Fetch homepage and extract all category links"""
+    base_url = "https://www.bookdelivery.com/il-en/"
+    print("Fetching homepage to get categories...")
+    html = fetch_with_selenium(base_url)
+    if not html:
+        print("Failed to fetch homepage")
+        return {}
+    
+    soup = BeautifulSoup(html, 'html.parser')
+    categories = {}
+    
+    # Find the category list
+    category_heading = soup.find('p', class_='subtitulofiltro', string='Category')
+    if category_heading:
+        category_list = category_heading.find_next_sibling('ul')
+        if category_list:
+            for li in category_list.find_all('li', class_='category-li'):
+                a_tag = li.find('a')
+                if a_tag and a_tag.get('href'):
+                    category_name = a_tag.find('span').get_text(strip=True) if a_tag.find('span') else a_tag.get_text(strip=True)
+                    category_url = a_tag['href']
+                    if category_name and category_url:
+                        categories[category_name] = category_url
+    
+    print(f"Found {len(categories)} categories")
+    return categories
+
 def get_next_page_links(html_file_path):
     """Extract links to next 4 pages"""
     with open(html_file_path, 'r', encoding='utf-8') as f:
@@ -188,56 +212,63 @@ def extract_category_links(soup):
     return categories
 
 
-def crawl_books(source):
-    try:
-        if source.startswith('file://'):
-            source = source[7:]
-
-        if os.path.isfile(source):
-            print(f"Loading local HTML file: {source}")
-            if 'Art Books' in source:
-                # Parse art books
-                books = parse_art_books(source)
-                print(f"Found {len(books)} books")
-                
-                # Save to JSON
-                with open('art_books.json', 'w', encoding='utf-8') as f:
-                    json.dump(books, f, indent=2, ensure_ascii=False)
-                
-                # Get next page links
-                next_links = get_next_page_links(source)
-                print(f"Next page links: {next_links}")
-                
-                # Save links
-                with open('next_pages.json', 'w', encoding='utf-8') as f:
-                    json.dump(next_links, f, indent=2)
-                
-                return
-            else:
-                # Original functionality for other files
-                html = load_html_from_file(source)
-                if html is None:
-                    return
-                soup = BeautifulSoup(html, 'html.parser')
-                categories = extract_category_links(soup)
-                print(categories)
-                return
-
-        print(f"Fetching page: {source}")
-        html = fetch_with_selenium(source)
+def crawl_books():
+    """Crawl all categories and their first 5 pages"""
+    all_books = []
+    
+    # Get all categories from homepage
+    categories = get_categories_from_homepage()
+    if not categories:
+        print("No categories found, aborting")
+        return
+    
+    # For each category, crawl first 5 pages
+    for category_name, category_url in categories.items():
+        print(f"\nCrawling category: {category_name}")
+        category_books = []
         
-        if html:
-            soup = BeautifulSoup(html, 'html.parser')
-            categories = extract_category_links(soup)
-            print(categories)
-        else:
-            print("Failed to retrieve page with Selenium")
-    except Exception as e:
-        print(f"An error occurred: {e}")
+        # Crawl pages 1-5 for this category
+        for page_num in range(1, 6):  # 1 to 5
+            if page_num == 1:
+                page_url = category_url
+            else:
+                # Add page parameter
+                if '?' in category_url:
+                    page_url = f"{category_url}&page={page_num}"
+                else:
+                    page_url = f"{category_url}?page={page_num}"
+            
+            print(f"  Fetching page {page_num}: {page_url}")
+            html = fetch_with_selenium(page_url)
+            
+            if html:
+                # Parse books from this page
+                page_books = parse_books(html, category_name)
+                print(f"    Found {len(page_books)} books on page {page_num}")
+                category_books.extend(page_books)
+            else:
+                print(f"    Failed to fetch page {page_num}")
+            
+            # Sleep for ~3 seconds between requests
+            if page_num < 5:  # Don't sleep after last page
+                print("    Sleeping for 3 seconds...")
+                time.sleep(3)
+        
+        print(f"  Total books for {category_name}: {len(category_books)}")
+        all_books.extend(category_books)
+        
+        # Sleep between categories too
+        print("  Sleeping for 3 seconds before next category...")
+        time.sleep(3)
+    
+    # Save all books to JSON
+    print(f"\nTotal books crawled: {len(all_books)}")
+    with open('all_books.json', 'w', encoding='utf-8') as f:
+        json.dump(all_books, f, indent=2, ensure_ascii=False)
+    
+    print("Saved all books to all_books.json")
 
 
-# Start source: either a URL or a local HTML file
-# local_file = "Bookdelivery.com homepage.htm"
-# base_url = "https://www.bookdelivery.com/il-en/"
-art_page_local = "Bookdelivery.com Art Books.htm"
-crawl_books(art_page_local)
+# Start crawling
+if __name__ == "__main__":
+    crawl_books()
