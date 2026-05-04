@@ -212,9 +212,24 @@ def extract_category_links(soup):
     return categories
 
 
-def crawl_books():
-    """Crawl all categories and their first 5 pages"""
-    all_books = []
+def crawl_books(start_category_index=1, start_page_num=1):
+    """Crawl all categories and their first 5 pages, starting from specified category and page"""
+    all_books_dict = {}  # Use dict to handle duplicates by unique key
+    
+    # Load existing books if file exists
+    json_file = 'all_books.json'
+    if os.path.exists(json_file):
+        try:
+            with open(json_file, 'r', encoding='utf-8') as f:
+                existing_books = json.load(f)
+            print(f"Loaded {len(existing_books)} existing books from {json_file}")
+            # Convert to dict for easy lookup/update
+            for book in existing_books:
+                key = f"{book.get('Title', '')}_{book.get('Authors', '')}".lower().replace(' ', '_')
+                all_books_dict[key] = book
+        except:
+            print("Could not load existing books, starting fresh")
+            all_books_dict = {}
     
     # Get all categories from homepage
     categories = get_categories_from_homepage()
@@ -222,13 +237,19 @@ def crawl_books():
         print("No categories found, aborting")
         return
     
-    # For each category, crawl first 5 pages
-    for category_name, category_url in categories.items():
-        print(f"\nCrawling category: {category_name}")
+    category_list = list(categories.items())
+    
+    # Start from specified category index (1-based)
+    for cat_idx in range(start_category_index - 1, len(category_list)):
+        category_name, category_url = category_list[cat_idx]
+        print(f"\nCrawling category {cat_idx + 1}/{len(category_list)}: {category_name}")
         category_books = []
         
-        # Crawl pages 1-5 for this category
-        for page_num in range(1, 6):  # 1 to 5
+        # Determine starting page for this category
+        page_start = start_page_num if cat_idx == start_category_index - 1 else 1
+        
+        # Crawl pages for this category
+        for page_num in range(page_start, 6):  # 1 to 5
             if page_num == 1:
                 page_url = category_url
             else:
@@ -245,7 +266,19 @@ def crawl_books():
                 # Parse books from this page
                 page_books = parse_books(html, category_name)
                 print(f"    Found {len(page_books)} books on page {page_num}")
+                
+                # Add/update books in the dictionary
+                for book in page_books:
+                    key = f"{book.get('Title', '')}_{book.get('Authors', '')}".lower().replace(' ', '_')
+                    all_books_dict[key] = book  # This will overwrite if key exists
+                
                 category_books.extend(page_books)
+                
+                # Save progress after each page (convert dict to list)
+                all_books_list = list(all_books_dict.values())
+                with open(json_file, 'w', encoding='utf-8') as f:
+                    json.dump(all_books_list, f, indent=2, ensure_ascii=False)
+                print(f"    Saved progress: {len(all_books_list)} total books")
             else:
                 print(f"    Failed to fetch page {page_num}")
             
@@ -255,20 +288,24 @@ def crawl_books():
                 time.sleep(3)
         
         print(f"  Total books for {category_name}: {len(category_books)}")
-        all_books.extend(category_books)
         
-        # Sleep between categories too
-        print("  Sleeping for 3 seconds before next category...")
-        time.sleep(3)
+        # Sleep between categories too (except for the last one)
+        if cat_idx < len(category_list) - 1:
+            print("  Sleeping for 3 seconds before next category...")
+            time.sleep(3)
     
-    # Save all books to JSON
-    print(f"\nTotal books crawled: {len(all_books)}")
-    with open('all_books.json', 'w', encoding='utf-8') as f:
-        json.dump(all_books, f, indent=2, ensure_ascii=False)
+    # Final save (convert dict to list)
+    all_books_list = list(all_books_dict.values())
+    print(f"\nCrawling complete. Total books crawled: {len(all_books_list)}")
+    with open(json_file, 'w', encoding='utf-8') as f:
+        json.dump(all_books_list, f, indent=2, ensure_ascii=False)
     
-    print("Saved all books to all_books.json")
+    print(f"Saved all books to {json_file}")
 
 
 # Start crawling
 if __name__ == "__main__":
-    crawl_books()
+    import sys
+    start_category = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+    start_page = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+    crawl_books(start_category, start_page)
