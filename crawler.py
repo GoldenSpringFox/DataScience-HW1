@@ -11,6 +11,8 @@ import math
 import json
 import re
 
+hide_window = False  # Set to True to hide the browser window during crawling
+
 def fetch_with_selenium(url):
     """Fetch page using Selenium with anti-bot detection options"""
     chrome_options = Options()
@@ -19,8 +21,10 @@ def fetch_with_selenium(url):
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
-    chrome_options.add_argument("--window-position=-2000,-2000")  # Position window off-screen
-    chrome_options.add_argument("--window-size=800,600")  # Set a reasonable window size
+    if (hide_window):
+        chrome_options.add_argument("--window-position=-2000,-2000")  # Position window off-screen
+        chrome_options.add_argument("--window-size=800,600")  # Set a reasonable window size
+
     
     service = Service()
     driver = webdriver.Chrome(service=service, options=chrome_options)
@@ -37,12 +41,13 @@ def fetch_with_selenium(url):
     finally:
         driver.quit()
 
-def parse_books(html_content, category_name, existing_books_dict=None, page_num=None, total_pages=5):
+def parse_books(html_content, category_name, existing_books_dict=None, page_num=None, total_pages=5, skip_only_if_missing=False):
     """Parse the HTML content and extract book information"""
     soup = BeautifulSoup(html_content, 'html.parser')
     product_divs = soup.find_all('div', class_=lambda x: x and 'box-producto' in x)
     
     books = []
+    skipped_book_count = 0
     
     for idx, product in enumerate(product_divs, start=1):
         book = {}
@@ -75,9 +80,15 @@ def parse_books(html_content, category_name, existing_books_dict=None, page_num=
         book_key = f"{book.get('Title', '')}_{book.get('Authors', '')}".lower().replace(' ', '_')
         if existing_books_dict and book_key in existing_books_dict:
             existing_book = existing_books_dict[book_key]
-            if is_book_complete(existing_book):
-                print(f"  Skipping already complete book: {book['Title']} by {book['Authors']}")
+            if skip_only_if_missing:
+                # print(f"  Skipping existing book: {book['Title']} by {book['Authors']}")
                 books.append(existing_book)
+                skipped_book_count += 1
+                continue
+            elif is_book_complete(existing_book):
+                # print(f"  Skipping already complete book: {book['Title']} by {book['Authors']}")
+                books.append(existing_book)
+                skipped_book_count += 1
                 continue
         
         # Price in NIS
@@ -243,6 +254,8 @@ def parse_books(html_content, category_name, existing_books_dict=None, page_num=
         
         books.append(book)
     
+    print(f"    Skipped {skipped_book_count} books that were already in JSON and complete.")
+
     return books
 
 def get_categories_from_homepage():
@@ -326,8 +339,13 @@ def extract_category_links(soup):
     return categories
 
 
-def crawl_books(start_category_index=1, start_page_num=1):
-    """Crawl all categories and their first 5 pages, starting from specified category and page"""
+def crawl_books(start_category_index=1, start_page_num=1, skip_only_if_missing=False):
+    """Crawl all categories and their first 5 pages, starting from specified category and page.
+    
+    Args:
+        skip_only_if_missing: If True, only skip books that are not in the JSON at all.
+                              If False, skip books that are already complete (default behavior).
+    """
     all_books_dict = {}  # Use dict to handle duplicates by unique key
     
     # Load existing books if file exists
@@ -378,8 +396,8 @@ def crawl_books(start_category_index=1, start_page_num=1):
             
             if html:
                 # Parse books from this page
-                page_books = parse_books(html, category_name, existing_books_dict=all_books_dict, page_num=page_num, total_pages=5)
-                print(f"    Found {len(page_books)} books on page {page_num}")
+                page_books = parse_books(html, category_name, existing_books_dict=all_books_dict, page_num=page_num, total_pages=5, skip_only_if_missing=skip_only_if_missing)
+                # print(f"    Found {len(page_books)} books on page {page_num}")
                 
                 # Add/update books in the dictionary
                 for book in page_books:
@@ -396,17 +414,15 @@ def crawl_books(start_category_index=1, start_page_num=1):
             else:
                 print(f"    Failed to fetch page {page_num}")
             
-            # Sleep for ~3 seconds between requests
+            
             if page_num < 5:  # Don't sleep after last page
-                print("    Sleeping for 3 seconds...")
-                time.sleep(3)
+                time.sleep(4)
         
         print(f"  Total books for {category_name}: {len(category_books)}")
         
         # Sleep between categories too (except for the last one)
         if cat_idx < len(category_list) - 1:
-            print("  Sleeping for 3 seconds before next category...")
-            time.sleep(3)
+            time.sleep(5)
     
     # Final save (convert dict to list)
     all_books_list = assign_book_ids(list(all_books_dict.values()))
@@ -420,6 +436,9 @@ def crawl_books(start_category_index=1, start_page_num=1):
 # Start crawling
 if __name__ == "__main__":
     import sys
-    start_category = 1
-    start_page = 2
-    crawl_books(start_category, start_page)
+    start_category = 10
+    start_page = 1
+    skip_only_if_missing = True
+    hide_window = True
+    
+    crawl_books(start_category, start_page, skip_only_if_missing)
