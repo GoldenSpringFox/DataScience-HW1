@@ -37,7 +37,7 @@ def fetch_with_selenium(url):
     finally:
         driver.quit()
 
-def parse_books(html_content, category_name, page_num=None, total_pages=5):
+def parse_books(html_content, category_name, existing_books_dict=None, page_num=None, total_pages=5):
     """Parse the HTML content and extract book information"""
     soup = BeautifulSoup(html_content, 'html.parser')
     product_divs = soup.find_all('div', class_=lambda x: x and 'box-producto' in x)
@@ -71,6 +71,14 @@ def parse_books(html_content, category_name, page_num=None, total_pages=5):
             book['Authors'] = author_elem.get_text(strip=True)
         else:
             book['Authors'] = 'N/A'
+        
+        book_key = f"{book.get('Title', '')}_{book.get('Authors', '')}".lower().replace(' ', '_')
+        if existing_books_dict and book_key in existing_books_dict:
+            existing_book = existing_books_dict[book_key]
+            if is_book_complete(existing_book):
+                print(f"  Skipping already complete book: {book['Title']} by {book['Authors']}")
+                books.append(existing_book)
+                continue
         
         # Price in NIS
         price_elem = product.find('strong')
@@ -285,6 +293,14 @@ def get_next_page_links(html_file_path):
     return links[:4]  # Return first 4 next pages
 
 
+def is_book_complete(book):
+    """Return True when no fields are left as placeholders or missing."""
+    for value in book.values():
+        if value == 'N/A' or value == '' or value is None:
+            return False
+    return True
+
+
 def assign_book_ids(books):
     for idx, book in enumerate(books, start=1):
         book['ID'] = idx
@@ -362,7 +378,7 @@ def crawl_books(start_category_index=1, start_page_num=1):
             
             if html:
                 # Parse books from this page
-                page_books = parse_books(html, category_name, page_num=page_num, total_pages=5)
+                page_books = parse_books(html, category_name, existing_books_dict=all_books_dict, page_num=page_num, total_pages=5)
                 print(f"    Found {len(page_books)} books on page {page_num}")
                 
                 # Add/update books in the dictionary
