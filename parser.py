@@ -24,6 +24,15 @@ if __name__ == "__main__":
     df_books_sorted = df_books.sort_values(by='Title', ascending=True)
     print(df_books_sorted.head(10))
 
+    #add a binary feature Isexpensive and NumberOfAuthors
+    median_price = df_books['Price in NIS'].median()
+    df_books['IsExpensive'] = (df_books['Price in NIS'] > median_price).astype(int)
+    df_books['NumberOfAuthors'] = df_books['Authors'].apply(
+        lambda x: 0 if x == 'N/A' else len([a for a in x.split(',') if a.strip()]))
+
+    #save
+    #df_books.to_csv('output/books_raw.csv', index=False, encoding='utf-8')
+
 
 
 
