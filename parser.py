@@ -16,13 +16,15 @@ if __name__ == "__main__":
     #df_books.to_csv('output/books_raw.csv', index=False, encoding='utf-8')
     #df_books.to_json('output/books_raw.json', orient='records', force_ascii=False, indent=2)
 
-    #print first 10 pages before sort by tytle
+    #print first 10 pages before sort by tytle and save as csv
     pd.set_option('display.max_columns', None)
     print(df_books.head(10))
+    df_books.head(10).to_csv('output/books_before_sort.csv', index=False)
 
     #sort by title and print
     df_books_sorted = df_books.sort_values(by='Title', ascending=True)
-    #print(df_books_sorted.head(10))
+    print(df_books_sorted.head(10))
+    df_books_sorted.head(10).to_csv('output/books_after_sort.csv', index=False)
 
     #add a binary feature Isexpensive and NumberOfAuthors
     median_price = df_books['Price in NIS'].median()
@@ -30,8 +32,15 @@ if __name__ == "__main__":
     df_books['NumberOfAuthors'] = df_books['Authors'].apply(
         lambda x: 0 if x == 'N/A' else len([a for a in x.split(',') if a.strip()]))
 
-    #save
-    #df_books.to_csv('output/books_raw.csv', index=False, encoding='utf-8')
+    #save to csv after add two colums
+    df_books.to_csv('output/books_processed.csv', index=False, encoding='utf-8')
+    #save the updated to json
+    df_books.to_json('output/books_processed.json', orient='records', force_ascii=False, indent=2)
+    #print the first 10 rows and also save to csv
+    print(df_books.head(10))
+    df_books.head(10).to_csv('output/books_processed_preview.csv', index=False)
+
+
 
     cols = [
         'Price in USD',
