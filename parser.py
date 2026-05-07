@@ -22,7 +22,7 @@ if __name__ == "__main__":
 
     #sort by title and print
     df_books_sorted = df_books.sort_values(by='Title', ascending=True)
-    print(df_books_sorted.head(10))
+    #print(df_books_sorted.head(10))
 
     #add a binary feature Isexpensive and NumberOfAuthors
     median_price = df_books['Price in NIS'].median()
@@ -32,6 +32,27 @@ if __name__ == "__main__":
 
     #save
     #df_books.to_csv('output/books_raw.csv', index=False, encoding='utf-8')
+
+    cols = [
+        'Price in USD',
+        'Year',
+        'StarRating',
+        'NumberOfReviews',
+        'NumberOfAuthors'
+    ]
+    summary_dict = {}
+    for col in cols:
+        data = df_books[col].dropna()
+        summary_dict[col] = {'mean':data.mean(),
+                             'std': data.std(),
+                             'min':  data.min(),
+                             'max': data.max(),
+                             'median': data.median()}
+
+    df_summary = pd.DataFrame(summary_dict)
+    df_summary.loc['total_rows'] = len(df_books)
+    #save the stats in csv
+    df_summary.to_csv('output/books_summary.csv')
 
 
 
