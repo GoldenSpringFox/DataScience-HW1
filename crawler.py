@@ -1,4 +1,5 @@
 import os
+from collections import defaultdict
 from bs4 import BeautifulSoup
 import time
 from selenium import webdriver
@@ -320,6 +321,44 @@ def assign_book_ids(books):
     return books
 
 
+def load_books_json(json_path="all_books.json"):
+    """Load book records from a JSON file."""
+    with open(json_path, encoding="utf-8") as json_file:
+        return json.load(json_file)
+
+
+def print_category_progress(json_path="all_books.json", expected_per_category=250, bar_width=10):
+    """Print progress per category using a filled bar and category counts."""
+    books = load_books_json(json_path)
+
+    if not books:
+        print(f"No books found in {json_path}.")
+        return
+
+    category_counts = defaultdict(int)
+    for book in books:
+        category = book.get("Category") or book.get("Categories") or "Unknown"
+        category_counts[category] += 1
+
+    homepage_categories = get_categories_from_homepage()
+    if homepage_categories:
+        for category_name in homepage_categories:
+            category_counts.setdefault(category_name, 0)
+
+    sorted_categories = sorted(category_counts.items(), key=lambda item: item[0].lower())
+
+    for index, (category, count) in enumerate(sorted_categories, start=1):
+        percent = 0
+        if expected_per_category > 0:
+            percent = min(100, int(round(count * 100 / expected_per_category)))
+
+        filled = int(percent * bar_width / 100)
+        empty = bar_width - filled
+        bar = " ".join(["|"] * filled + ["-"] * empty)
+
+        print(f"{index:2}. [{bar}] {percent}% ({count}/{expected_per_category}) - {category}")
+
+
 def extract_category_links(soup):
     categories = {}
     category_heading = soup.find('p', class_='subtitulofiltro', string=lambda t: t and t.strip().lower() == 'category')
@@ -436,9 +475,11 @@ def crawl_books(start_category_index=1, start_page_num=1, skip_only_if_missing=F
 # Start crawling
 if __name__ == "__main__":
     import sys
-    start_category = 10
+    start_category = 1
     start_page = 1
     skip_only_if_missing = True
     hide_window = True
     
-    crawl_books(start_category, start_page, skip_only_if_missing)
+    # crawl_books(start_category, start_page, skip_only_if_missing)
+
+    print_category_progress()
