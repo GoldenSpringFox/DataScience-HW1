@@ -2,3 +2,4 @@
 /__pycache__
 *.zip
 /Exercises/Ex1 - Crawler/local_pages
+venv/
