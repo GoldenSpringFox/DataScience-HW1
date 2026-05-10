@@ -1,0 +1,73 @@
+~~~ Data Science Project Ideas ~~~
+
+Post Title (Subject): 3 Members (322336116, 208611030, ...)
+
+Post Body (Message):
+
+- Aviv Goldstein - ID: 322336116 - CSE: aviv.goldstein
+- Tomer Titinger - ID: 208611939 - CSE: ...
+- Shaked ben Chamo - ID: ... - CSE: ...
+
+
+--- First Idea ---
+
+Problem Domain: Magic the Gathering
+
+1. Problem Domain and Potential Questions
+
+Main Problem: It is difficult to cut cards from decks to make room for new ones
+
+Potential Questions: 
+- How can we identify common deck building patterns per commander
+- can we identify outliers / less synergistic cards that could be cut
+- can we suggest context-appropriate cuts to not reduce important categories below certain thresholds
+
+Project Direction:
+- give an overview analysis on a deck, comparing to others in its category and evaluating important metrics (draw, ramp, disruption, win-conditions..)
+- suggest cards to cut from the deck
+- look in the database for existing cards that could work nicely in the deck
+
+2. Data Collection Methods
+
+mainly use existing databases:
+- (card database)	https://scryfall.com/docs/api
+- (deck database)	https://archidekt.com/		
+- (deck database)	https://moxfield.com/
+- (community tags)	https://tagger.scryfall.com/
+
+3. Success Criteria
+- given a deck with an obvious missing part, the program will suggest it
+- given no specific directions, offer suggestions similar to EDHREC
+- offer to cut cards that make sense in my personal experience (domain expert)
+- identify different pattern for specific predetermined outlier commanders
+
+
+
+
+1. Problem Domain and Potential Questions
+
+Describe the topic or area your project focuses on. What is the main problem you aim to explore? What questions will your project try to answer?
+
+Please be concrete. Do not write only a broad domain such as “sports” or “movies.” Instead, describe possible directions within that domain, for example: predicting injuries, identifying breakout players, clustering players by on-court behavior, recommending movies, or predicting the success of sequels or book adaptations.
+
+2. Data Collection Method
+
+Explain how you plan to obtain the data for the project. For example: using existing public datasets, crawling websites, collecting your own data, APIs, or other relevant sources.
+
+Please mention concrete sources whenever possible, and include links when relevant. Example sources may include Basketball-Reference, NBAstuffer, IMDb, Kaggle, or Goodreads, depending on your project domain.
+
+3. Success Criteria
+
+Explain how you will evaluate whether the project was successful. Specify the metrics, benchmarks, or qualitative outcomes you plan to use in order to evaluate your results.
+
+Please be as specific as possible. Relevant evaluation methods may include standard machine learning metrics, accuracy, precision, recall, user studies, comparisons to baselines, or evaluation by a domain expert. For example, a clustering project might use standard ML metrics together with evaluation by a basketball expert, while a recommendation project might combine accuracy with a user study.
+
+Important:
+
+Please write your ideas in your own words. Do not submit text copied directly from an LLM.
+
+Deadline:
+
+Submit your post by April 10 at 14:00.
+
+At this stage, the goal is to present several reasonable and well-thought-out project directions. You do not need to commit yet to a final project topic.

@@ -1,2 +1,4 @@
 /local_pages
 /__pycache__
+*.zip
+/Exercises/Ex1 - Crawler/local_pages
