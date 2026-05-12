@@ -3,3 +3,5 @@
 *.zip
 /Exercises/Ex1 - Crawler/local_pages
 venv/
+Claude TODO.md
+Project/cards.json
