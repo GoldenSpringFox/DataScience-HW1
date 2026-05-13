@@ -5,3 +5,9 @@
 venv/
 Claude TODO.md
 Project/cards.json
+/.claude
+/.jupyter
+.jupyter_ystore.db
+CONTEXT.md
+/Project/.ipynb_checkpoints
+*.parquet

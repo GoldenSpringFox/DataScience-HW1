@@ -2,6 +2,10 @@
 # EDHRec Wrapper: https://pypi.org/project/pyedhrec/
 # Archidekt Wrapper: https://github.com/linkian209/pyrchidekt
 
+import os
+from datetime import datetime, timedelta
+import pyarrow as pa
+import pyarrow.parquet as pq
 import scrython
 from scrython.base import ScrythonRequestHandler
 import pandas as pd
@@ -10,12 +14,18 @@ from tqdm import tqdm
 
 app_name = "EDHDataAnalysis"
 app_email = "avivg2001@gmail.com"
-cards_file = "Project\\cards.json"
+path_cards_file = "Project\\cards.json"
+path_cards_parquet = "Project\\cards.parquet"
+
+# manually increase whenever field cleaning / preprocessing logic changes, to force parquet update
+SCHEMA_VERSION = "2"
+
 
 def fetch_cards():
     ScrythonRequestHandler.set_user_agent(f'{app_name}/1.0 ({app_email})')
     bulk = scrython.bulk_data.ByType(type='oracle_cards')
-    bulk.download(filepath=cards_file, progress=True)
+    bulk.download(filepath=path_cards_file, progress=True)
+
 
 def clean_cards_df(df: pd.DataFrame) -> pd.DataFrame:
     df['released_at'] = pd.to_datetime(df['released_at'], errors='coerce')
@@ -29,7 +39,6 @@ def clean_cards_df(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # Flatten prices dict into float columns: price_usd, price_eur, price_tix, etc.
     if 'prices' in df.columns:
         prices = pd.json_normalize(df['prices'].tolist())
         prices.index = df.index
@@ -37,7 +46,6 @@ def clean_cards_df(df: pd.DataFrame) -> pd.DataFrame:
             df[f'price_{col}'] = pd.to_numeric(prices[col], errors='coerce')
         df = df.drop(columns=['prices'])
 
-    # Flatten legalities dict into bool columns: legal_commander, legal_legacy, etc.
     if 'legalities' in df.columns:
         legalities = pd.json_normalize(df['legalities'].tolist())
         legalities.index = df.index
@@ -59,6 +67,43 @@ def clean_cards_df(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].astype('boolean')
 
+    if 'legal_commander' in df.columns and 'games' in df.columns:
+        df = df[df['legal_commander'] & df['games'].apply(lambda x: 'paper' in x)]
+
+    return df
+
+
+def load_cards_df() -> pd.DataFrame:
+    fetch_date = None
+    schema_ok = False
+
+    if os.path.exists(path_cards_parquet):
+        meta = pq.read_metadata(path_cards_parquet).metadata or {}
+        schema_ok = meta.get(b'schema_version', b'').decode() == SCHEMA_VERSION
+        fetch_date_str = meta.get(b'fetch_date', b'').decode()
+        if fetch_date_str:
+            fetch_date = datetime.fromisoformat(fetch_date_str)
+
+    if fetch_date is None and os.path.exists(path_cards_file):
+        fetch_date = datetime.fromtimestamp(os.path.getmtime(path_cards_file))
+
+    stale = fetch_date is None or (datetime.now() - fetch_date) >= timedelta(weeks=2)
+
+    if stale:
+        fetch_cards()
+        fetch_date = datetime.now()
+
+    if schema_ok and not stale:
+        return pd.read_parquet(path_cards_parquet)
+
+    df = clean_cards_df(pd.read_json(path_cards_file))
+    table = pa.Table.from_pandas(df)
+    merged_meta = {
+        **(table.schema.metadata or {}),
+        b'schema_version': SCHEMA_VERSION.encode(),
+        b'fetch_date': fetch_date.isoformat().encode(),
+    }
+    pq.write_table(table.replace_schema_metadata(merged_meta), path_cards_parquet)
     return df
 
 
@@ -73,7 +118,7 @@ def print_df_stats(df: pd.DataFrame) -> None:
         print(f"  {col:<{col_width}}  {dtype:<12}  {null_pct:5.1f}% null")
 
 
-def print_top_edhrec(df: pd.DataFrame, n: int = 100) -> None:
+def print_top_edhrec(df: pd.DataFrame, n: int = 10) -> None:
     top = (df.dropna(subset=['edhrec_rank'])
              .sort_values('edhrec_rank')
              .head(n)[['name', 'edhrec_rank', 'type_line', 'cmc']])
@@ -114,8 +159,7 @@ def plot_color_identity_distribution(df: pd.DataFrame) -> None:
 
 
 def analyze_card_json():
-    cards_df = pd.read_json(cards_file)
-    cards_df = clean_cards_df(cards_df)
+    cards_df = load_cards_df()
     print_df_stats(cards_df)
     print_top_edhrec(cards_df)
     plot_color_identity_distribution(cards_df)

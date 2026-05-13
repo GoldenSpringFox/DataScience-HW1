@@ -28,13 +28,6 @@
 
 
 
-
-
-
-
-
-
-
 ~~~ MTG Project - Initial Idea ~~~
 
 Problem Domain: Magic the Gathering
