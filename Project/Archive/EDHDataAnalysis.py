@@ -107,12 +107,19 @@ def load_cards_df() -> pd.DataFrame:
     return df
 
 
+OVERVIEW_COLS = [
+    'name', 'cmc', 'color_identity', 'mana_cost', 'type_line', 'set',
+    'oracle_text', 'power', 'toughness', 'edhrec_rank', 'produced_mana',
+    'game_changer', 'price_usd',
+]
+
 def print_df_stats(df: pd.DataFrame) -> None:
     print(f"Cards: {len(df):,}")
     print(f"Fields: {len(df.columns)}\n")
 
-    col_width = max(len(c) for c in df.columns)
-    for col in df.columns:
+    cols = [c for c in OVERVIEW_COLS if c in df.columns]
+    col_width = max(len(c) for c in cols)
+    for col in cols:
         dtype = str(df[col].dtype)
         null_pct = df[col].isna().mean() * 100
         print(f"  {col:<{col_width}}  {dtype:<12}  {null_pct:5.1f}% null")
