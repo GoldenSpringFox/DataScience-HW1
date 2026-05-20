@@ -17,7 +17,9 @@
     produced_mana
     game_changer
     prices(usd)
-    [get scryfall tagger information]
+    [scryfall community tags]
+    [edh high lift / synergy]
+    [edh salt score]
 
 - Filters: 
     legal(commander):true
