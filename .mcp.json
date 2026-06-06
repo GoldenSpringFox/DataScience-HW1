@@ -2,7 +2,7 @@
   "mcpServers": {
     "jupyter": {
       "command": "uvx",
-      "args": ["jupyter-mcp-server@latest"],
+      "args": ["jupyter-mcp-server==0.1.6"],
       "env": {
         "JUPYTER_URL": "http://localhost:8888",
         "JUPYTER_TOKEN": "JupTokEDHCut",

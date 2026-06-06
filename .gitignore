@@ -11,3 +11,6 @@ Project/cards.json
 CONTEXT.md
 /Project/.ipynb_checkpoints
 *.parquet
+cards.json
+scryfall_fields.json
+Project/scryfall_fields.json
