@@ -1,0 +1,24 @@
+-- Project Title --
+EDHCut
+
+-- Members ---
+• Aviv Goldstein - ID: 322336116 - CSE: aviv.goldstein
+• Tomer Titinger - ID: 208611939 - CSE: tomer.titinger
+• Shaked ben Hamo - ID: 208323345 - CSE: shaked_benhamo
+
+-- Problem Description --
+The game Magic: The Gathering requires its players to build their own 100-card decks (this limitation is specific to "Commander" or "EDH").
+During the process of deckbuilding, players easily detect cool and shiny new cards they would like to add, but many players struggle with cutting out existing cards to free up the required deck-slots.
+
+Our goal with this project is to develop a data-driven recommendation system that suggests candidate cards to cut from EDH decks. By combining card metadata, popularity metrics, decklist information and semantic card tags, the system will analyze card roles, relationships between cards, deck archetypes, and usage patterns. We would also like to give personalized suggestions by taking into consideration the set of new cards the user wants to put into the deck.
+
+
+-- Local Data --
+1. Scryfall - Comprehensive MTG card database and API providing detailed card data, rulings, pricing, images, legality, and metadata for analysis and modeling.
+
+2. EDHREC - Community-driven Commander (EDH) analytics platform that aggregates deck usage statistics, card synergies, archetype trends, and popularity metrics from thousands of decks.
+
+3. Archidekt - MTG deck-building platform that provides user-created decklists, deck composition data, tags, and deck strategy information useful for gameplay and meta-analysis.
+
+4. Scryfall Tagger - Community-powered MTG tagging system that provides semantic labels and annotations for cards (themes, mechanics, art, tribes, actions, etc.), enabling richer feature engineering and categorical analysis.
+

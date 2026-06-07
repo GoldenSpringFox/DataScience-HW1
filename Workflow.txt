@@ -11,9 +11,9 @@ update requirements:        pip freeze > requirements.txt
 
 
 --- Jupyter ---
-[setup jupyter mcp]:            https://github.com/datalayer/jupyter-mcp-server?tab=readme-ov-file#1-set-up-your-environment
 run jupyter (from venv):        jupyter lab --port 8888 --IdentityProvider.token JupTokEDHCut --ip 0.0.0.0
 
 
 --- Claude ---
+[setup jupyter mcp]:            https://github.com/datalayer/jupyter-mcp-server?tab=readme-ov-file#1-set-up-your-environment
 - Reduce Context:           ask it to summarize to CONTEXT.md, then /clear
