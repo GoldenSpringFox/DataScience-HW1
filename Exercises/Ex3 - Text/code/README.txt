@@ -1,0 +1,1 @@
+To view results, simply run main.py
