@@ -7,7 +7,7 @@ EDHCut
 • Shaked ben Hamo - ID: 208323345 - CSE: shaked_benhamo
 
 -- Problem Description --
-The game Magic: The Gathering requires its players to build their own 100-card decks (this limitation is specific to "Commander" or "EDH").
+The game "Magic: The Gathering" requires its players to build their own 100-card decks (this limitation is specific to "Commander" or "EDH").
 During the process of deckbuilding, players easily detect cool and shiny new cards they would like to add, but many players struggle with cutting out existing cards to free up the required deck-slots.
 
 Our goal with this project is to develop a data-driven recommendation system that suggests candidate cards to cut from EDH decks. By combining card metadata, popularity metrics, decklist information and semantic card tags, the system will analyze card roles, relationships between cards, deck archetypes, and usage patterns. We would also like to give personalized suggestions by taking into consideration the set of new cards the user wants to put into the deck.
