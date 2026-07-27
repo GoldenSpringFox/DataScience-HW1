@@ -626,3 +626,69 @@ decks? smoothing?) before building anything on top.
 > card by weighted (low mean PMI to rest of deck) + (low corpus inclusion rate), printing
 > top-10 cut suggestions with both component scores. No API, no frontend, no polish.
 > Write devlog entries per plan §4 as each step completes.
+
+---
+
+## Appendix A — Raw investigation notes (2026-07-19)
+
+Backing detail for §3's verdicts, captured so implementation tasks don't need to
+re-derive it from scratch. This is the working-session record; promote anything load-bearing
+into the relevant task prompt if it turns out to matter more than expected.
+
+**Scryfall bulk-data inventory** (`api.scryfall.com/bulk-data`, snapshot 2026-07-19,
+updates continuously — re-check `updated_at` at ingest time, don't hardcode sizes):
+
+| type | size | notes |
+|---|---|---|
+| `oracle_cards` | 179.8 MB | what task 5.2 downloads |
+| `oracle_tags` | 18.2 MB | what task 5.5 downloads — functional Tagger tags, `taggings[].oracle_id` |
+| `art_tags` | 40.6 MB | illustration tags, keyed by `illustration_id` — **not needed**, we only want functional tags |
+| `rulings` | 25.9 MB | keyed by `oracle_id` — not currently used by any task, potential future feature (surface relevant rulings in card explanations) |
+| `unique_artwork` | 264.4 MB | not used |
+| `default_cards` | 557.6 MB | not used, `oracle_cards` is the right grain (one row per card, not per printing) |
+| `all_cards` | 2572.0 MB | not used |
+
+**pyedhrec internals** (github.com/stainedhat/pyedhrec, last commit 2024-02-03 "Add typing"):
+- Source lives at `src/edhrec/pyedhrec.py` (note: package dir is `edhrec`, PyPI name is `pyedhrec`).
+- Constants: `base_url = "https://edhrec.com"`, `_json_base_url = "https://json.edhrec.com/cards"`, `_api_base_url = f"{base_url}/api"`.
+- Build-ID trick: `get_build_id()` fetches the homepage and scrapes the current Next.js
+  build id out of it; `_build_nextjs_uri()` then constructs
+  `{base_url}/_next/data/{build_id}/{endpoint}/{formatted_card_name}` for commander
+  pages (this is the mechanism task 5.4-A must verify still works and 5.4-B reimplements).
+- `get_card_details()` hits `{_json_base_url}/{formatted_card_name}` directly (no build id needed) — simpler path, worth using as-is for per-card lookups.
+- Card name formatting (`format_card_name`) lowercases and slugifies — check its exact
+  rules against a few of our multi-face/punctuation card names (e.g. "Yoshimaru, Ever
+  Faithful") before trusting it blindly.
+- Caching is in-memory only, 24h TTL, no way to inject a custom session — confirmed we
+  cannot reuse its HTTP layer, only its URL-construction logic, matching the plan's
+  "reference implementation, not a dependency" call.
+
+**pyrchidekt internals** (github.com/linkian209/pyrchidekt, MIT, v2.2.0 released
+2025-10-08, 28 commits, 19 stars):
+- Entry point is `getDeckById()`, returning dataclasses with categories → cards →
+  quantity + oracle card info.
+- No search/listing endpoint in the package — confirmed gap that task 5.3-A's raw
+  `requests` probe against `archidekt.com/api/decks/v3/?...` must fill.
+- No documented rate limiting or auth requirements found in the repo; treat as
+  unspecified and stay conservative (~1 req/s) per plan §5.
+
+**Orysa identity check** — confirmed via live Scryfall search (`api.scryfall.com/cards/search?q=orysa`):
+exactly one match, "Orysa, Tide Choreographer", Legendary Creature — Merfolk Bard, mono-U,
+*Secrets of Strixhaven*, released 2026-04-24, `edhrec_rank` 19627 at query time (thin
+corpus, as expected for the cold-start test case).
+
+**Devlog template provenance** — §4's `docs/devlog/TEMPLATE.md` structure was reverse-
+engineered from a previous-year course submission PDF ("Reel Patterns — A Deep Dive into
+the Data Behind the Scenes", Kimhi/Forshmit/Tuval), which the user has locally in their
+Downloads folder — **that PDF is not part of this repo and won't travel with git sync.**
+Nothing from it is needed going forward beyond what's already distilled into §4 (the
+per-chapter structure: hypothesis → data volumes → method + rejected alternatives →
+pre-declared evaluation criteria → numeric results → impediments); if a future session
+wants to re-examine the source example itself, it needs to be re-supplied on whatever
+device that session runs on.
+
+**Environment note (this device only, not portable via git):** the existing
+`Project/EDHDataAnalysis.ipynb` notebook (pre-DeckCut Scryfall exploration) was run
+against a local Jupyter server at `http://localhost:8888` with token `JupTokEDHCut`,
+configured in a local `.mcp.json`. That server isn't part of the repo and needs to be
+started fresh on any other device before that notebook can be driven interactively again.
