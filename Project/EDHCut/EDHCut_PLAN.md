@@ -288,7 +288,25 @@ Depends on: 5.2. **Do step A before step B.**
 > `"Commander"`-tagged (the rest just maindeck it) — presence alone isn't proof of a declared
 > partnership, confirmed with a real false-positive.
 
-> **Prompt (B — harvester):** Read `EDHCut/EDHCut_PLAN.md` §1, §3 and
+> **Prompt (B — harvester):** ✅ Done 2026-07-30 — findings in `docs/devlog/5.3b-archidekt-harvester.md`
+> and `docs/devlog/5.3c-precon-similarity.md`. Summary: all 5 slots harvested at scale —
+> 1,230 decks / 97,911 `deck_cards` rows total (Krenko 301, Kyler 300, Yenna 300, Orysa 29,
+> Yoshimaru+Bruse Tarl 300). The maybeboard/sideboard board-membership rule needed 5
+> iterations to get right (full postmortem in `docs/archidekt_api.md` §2.1) — final rule:
+> only a card's *first* category decides membership, and only the literal `"Sideboard"`
+> category is hardcoded-excluded regardless of its own `includedInDeck` flag. The
+> Yoshimaru+Bruse Tarl partner slot needed a 3-pass fallback beyond what this prompt
+> originally specified (exact pair yields only 4 decks) — added `colors=`-based
+> single-partner search once the pair is exhausted, storing fallback decks' *real* commanders
+> with a new `decks.slot_key` column to still group them into the pair's corpus; see
+> `docs/devlog/5.3b-archidekt-harvester.md` for the full design and the discovery that this
+> fallback also surfaced ~26 genuine pair decks the original `cardName=` search had been
+> missing. `decks.precon_similarity` is populated via a new `precons`/`precon_cards`
+> reference table (179 official Archidekt-curated precons) and generic
+> declared-or-alternative-commander matching — this also picked up Krenko (an alternative
+> commander in a Secret Lair precon) for free, beyond the Kyler case this prompt named.
+>
+> Read `EDHCut/EDHCut_PLAN.md` §1, §3 and
 > `docs/archidekt_api.md`. Implement `edhcut/ingest/archidekt.py`: for each commander slot in
 > config, page through `archidekt.com/search/decks?commanderName=<primary commander>&deckFormat=3&orderBy=-viewCount&page=N`
 > — for partner slots, also add `cardName=<other partner>` to the same query to pre-filter
