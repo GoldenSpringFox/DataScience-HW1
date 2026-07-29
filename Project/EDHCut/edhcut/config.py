@@ -41,6 +41,14 @@ class Paths:
         return self.data_dir / "kb"
 
     @property
+    def raw_dir(self) -> Path:
+        return self.data_dir / "raw"
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.data_dir / "logs"
+
+    @property
     def fixtures_dir(self) -> Path:
         return self.data_dir / "fixtures" / "my_decks"
 
@@ -56,7 +64,13 @@ class RateLimit:
 DAY = 60 * 60 * 24
 
 RATE_LIMITS: dict[str, RateLimit] = {
-    # Bulk file download, not a per-request API — delay is a formality.
+    # Matches scryfall.com/docs/api/rate-limits: 0.1s = the "all other methods" 10 req/s
+    # floor (what /bulk-data falls under); the actual file download hits *.scryfall.io,
+    # which the docs state has no rate limit at all, so this is stricter than required
+    # there. 1-day cache expiry matches their "cache at least 24h" guidance (prices only
+    # update daily). NOTE: this bucket is only correct for /bulk-data-style calls — a
+    # future live /cards/search or /cards/named call would need the stricter 500ms (2/s)
+    # limit those endpoints carry, not this one.
     "scryfall": RateLimit(min_delay_seconds=0.1, cache_expire_seconds=DAY),
     # Both undocumented, per-request endpoints (plan §5): a wider margin than the ~1 req/s
     # floor the plan calls tolerated, and a shared two-week cache expiry so a re-fetch
@@ -73,6 +87,8 @@ class Config:
     paths: Paths = field(default_factory=Paths)
     rate_limits: dict[str, RateLimit] = field(default_factory=lambda: dict(RATE_LIMITS))
     decks_per_commander: int = 300
+    # Decks not updated within this many days are skipped as stale (task 5.3-B); ~2 years.
+    deck_staleness_cutoff_days: int = 730
 
 
 CONFIG = Config()

@@ -10,7 +10,7 @@ dependencies = [
     "pandas>=2.2",
     "pyarrow>=16.0",
     "tqdm>=4.66",
-    "pyrchidekt>=2.2",
+    "mtg-parser>=0.0.1a55",
 ]
 
 [dependency-groups]

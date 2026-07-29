@@ -8,6 +8,7 @@ update requirements:        pip freeze > requirements.txt
 # Scryfall API Wrapper: https://github.com/NandaScott/Scrython
 # EDHRec Wrapper: https://pypi.org/project/pyedhrec/
 # Archidekt Wrapper: https://github.com/linkian209/pyrchidekt
+# get decklists: https://github.com/lheyberger/mtg-parser
 
 
 --- Jupyter ---
