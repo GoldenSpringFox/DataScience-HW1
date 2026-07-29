@@ -156,7 +156,7 @@ EDHCut/
 |---|---|---|
 | **Scryfall cards** | Official bulk `oracle_cards` dump. | ✅ Settled; already prototyped in `Analysis/EDHDataAnalysis.ipynb`. |
 | **Scryfall Tagger** | **Official `oracle_tags` bulk data file** (18.2 MB, updated daily, listed at `api.scryfall.com/bulk-data`, documented at scryfall.com/docs/api/tags). Tag objects carry a `taggings` array keyed by `oracle_id`; parent tags require traversing `child_ids`. | ✅ **No scraping needed at all.** The GraphQL/CSRF approach from plan v1 is obsolete — deleted. |
-| **Archidekt** | [`pyrchidekt`](https://github.com/linkian209/pyrchidekt) (MIT, last commit 2025-10, v2.2.0): typed dataclasses for **deck-by-id fetch only** — no search. | **Hybrid**: use `pyrchidekt` for fetching/parsing individual decks (its dataclasses handle the category/board structure); use raw `requests` against the deck **search** endpoint (`archidekt.com/api/decks/v3/?...`), which the wrapper doesn't cover. Verify search params in task 5.3-A. Note: pyrchidekt issues its own HTTP calls, so our rate limiting wraps *around* its calls (sleep between fetches), not inside them. |
+| **Archidekt** | [`mtg_parser`](https://pypi.org/project/mtg_parser/) (PyPI, actively maintained, last release 2026-07-25): multi-site decklist parser, Commander-focused, accepts any `requests`-compatible session — works against `archidekt.com` with no special handling (unlike Moxfield/Deckstats/MTGGoldfish, which need auth or Cloudflare-bypass). Superseded `pyrchidekt` (unmaintained since 2025-10, deck-fetch-only, no search) after investigation in task 5.3-A. | **Split use, not a single dependency for everything**: (1) for the **harvester** (5.3-B), fetch each deck's raw JSON ourselves via `GET /api/decks/{id}/` — `mtg_parser.parse_deck()` only returns cards (no views/updatedAt/format), and empirically excludes the commander card entirely from its output (the "Commander" category isn't marked `includedInDeck`), so we need the raw JSON anyway for metadata + commander identification. (2) `mtg_parser` earns its keep in **task 7.1** (decklist parser): `parse_deck(url, session)` lets that task accept pasted deck URLs from any of its 9 supported sites, not just raw text — worth revisiting 7.1's scope. Deck **search** (`archidekt.com/search/decks?commanderName=...&deckFormat=3&orderBy=-viewCount&page=N`) required reverse-engineering separately — see `docs/archidekt_api.md`; the "clean" `/api/decks/v3/` route is broken for direct external calls (confirmed internal-only — its own pagination `next` field leaks a private IP). |
 | **EDHREC** | [`pyedhrec`](https://github.com/stainedhat/pyedhrec) (last commit **2024-02**, effectively unmaintained): scrapes the EDHREC homepage for the current Next.js build ID, then hits `/_next/data/<build_id>/commanders/<slug>.json` routes; also `json.edhrec.com/cards/<name>` for card details. In-memory cache only, no session injection. | **Reference implementation, not a dependency.** The build-ID discovery trick is the right technique and self-heals across EDHREC deploys — reimplement it (~30 lines) inside our own `requests-cache` session in task 5.4. Test pyedhrec live first in 5.4-A: if its parsing still matches today's page shape, copy its response-parsing logic too. |
 
 ---
@@ -219,7 +219,7 @@ write `docs/devlog/<task-id>-<slug>.md` following the template. If a run produce
 |---|---|---|
 | **Scryfall (cards + oracle_tags bulk)** | ✅ Explicitly permitted — bulk files exist precisely for this. | Identifying `User-Agent`, cache ≥24 h. Don't hotlink card images at scale; use their image CDN per guidelines when the frontend needs images. |
 | **EDHREC** | ⚠️ No official API; Next.js data routes are undocumented. Check `edhrec.com/robots.txt` + ToS in task 5.4-A before fetching. | Volume is tiny at our scope: one page fetch per commander slot, ≥1 req/2s, cached two weeks, identifying UA. |
-| **Archidekt** | ⚠️ Real REST endpoints used by their own frontend, historically tolerated for respectful use. Check robots.txt/ToS in task 5.3-A. | ≥1 req/2s (wider margin than the tolerated floor), checkpointed, decks re-cached every two weeks. A few hundred requests total at our scope. |
+| **Archidekt** | ⚠️→✅ Investigated in task 5.3-A (2026-07-29): `robots.txt` permissive; the ToS's generic Acceptable Use Policy boilerplate literally bans "automated... requests, or queries," which *would* block this — **but** Archidekt's co-founder stated on their own forum (still-active account, 7 years ago through 22 months ago) that reading via the API is open/public, that EDHREC uses these exact same public endpoints with no special partnership, and that they only ask for attribution and restraint. Proceeding on that basis was an explicit user call, not an automatic green light — see `docs/archidekt_api.md` for the full quote and reasoning. | ≥1 req/2s (wider margin than the tolerated floor), checkpointed, decks re-cached every two weeks. A few hundred requests total at our scope. |
 | **General** | Card names/text are WotC IP under the Fan Content Policy (unmonetized fan projects fine). Ship only *derived* artifacts (scores, clusters), never republished raw EDHREC/Archidekt dumps. | |
 
 ---
@@ -266,30 +266,57 @@ Depends on: 5.1. 📊
 ### Task 5.3 — Archidekt deck harvester
 Depends on: 5.2. **Do step A before step B.**
 
-> **Prompt (A — investigation):** Read `EDHCut/EDHCut_PLAN.md` §3, §5. Check
-> `https://archidekt.com/robots.txt` and their ToS page. Then probe (respectfully, ~1
-> req/s) the deck **search** endpoint their frontend uses
-> (`archidekt.com/api/decks/v3/?formats=3&...`): confirm how to filter by commander
-> (including a partner pair), pagination, and ordering by views/recency. Separately verify
-> `pyrchidekt.getDeckById()` works today on a known deck id and inspect what its
-> dataclasses expose (categories/boards, commander markers, card name vs scryfall id).
-> Document everything in `docs/archidekt_api.md`. Do NOT build the harvester yet. Devlog
-> entry (impediments section especially).
+> **Prompt (A — investigation):** ✅ Done 2026-07-29 — findings in `docs/archidekt_api.md`
+> and devlog `5.3a-archidekt-investigation.md`. Summary: `robots.txt` permissive; ToS
+> boilerplate technically restrictive but the founder's own forum statement (quoted in
+> `docs/archidekt_api.md`) is the operative guidance, per explicit user decision. Deck-by-id
+> (`GET /api/decks/{id}/`) works directly. The "clean" search API
+> (`/api/decks/v3/`, `/api/decks/cards/`) is broken for external callers (internal-only —
+> confirmed via a leaked private IP in its own pagination). Working search path: fetch the
+> public SSR page `archidekt.com/search/decks?commanderName=<name>&deckFormat=3&orderBy=-viewCount&page=<n>`
+> and parse the embedded `__NEXT_DATA__` JSON (`props.pageProps.deckResults.{results,count}`)
+> — same technique task 5.4 needs for EDHREC. `card.card.oracleCard.uid` in the deck JSON
+> **is** the Scryfall `oracle_id` (verified against our own `cards` table) — no fuzzy name
+> matching needed for structured deck ingestion. Commander is identified by a card carrying
+> the `"Commander"` entry in its `categories` list — confirmed on both single-commander and
+> real partner-pair decks (both partners get their own `"Commander"`-tagged entry). No
+> dedicated second-*commander* search param exists (tried 4 plausible names, all silently
+> ignored), but adding `cardName=<other partner>` alongside `commanderName=<primary partner>`
+> does filter server-side to decks containing that card (commander or not) — cuts the
+> candidate pool ~23x (1000+ → 43 in testing) vs. `commanderName` alone. Still need a
+> client-side check afterward: only ~12% of `cardName`-matched decks actually had that card
+> `"Commander"`-tagged (the rest just maindeck it) — presence alone isn't proof of a declared
+> partnership, confirmed with a real false-positive.
 
 > **Prompt (B — harvester):** Read `EDHCut/EDHCut_PLAN.md` §1, §3 and
-> `docs/archidekt_api.md`. Implement `edhcut/ingest/archidekt.py`: for each commander
-> slot in config (handling the partner pair), search Commander-format decks (by views or
-> recency), fetch up to `config.decks_per_commander` (default 300; expect far fewer for
-> Orysa — record how many actually exist) deck details via pyrchidekt with our rate
-> limiting between calls, resolve card names to `oracle_id` via `card_names` (log
-> unresolved, skip maybeboards/sideboards, exclude the commander(s) from `deck_cards`,
-> store partner in `partner_oracle_id`), upsert into `decks` + `deck_cards`. Checkpointed/
-> resumable by `(source, source_id)`, runnable per-slot. After harvesting, compute
-> `decks.precon_similarity` for slots whose commander shipped in a precon (Kyler): Jaccard
-> overlap between each deck and the official precon list (fetch the precon decklist from
-> Archidekt or store it as a fixture) — we need this for corpus QA and the precon test.
-> Devlog entry (deck counts per slot, unresolved-name stats, precon-similarity
-> distribution for Kyler).
+> `docs/archidekt_api.md`. Implement `edhcut/ingest/archidekt.py`: for each commander slot in
+> config, page through `archidekt.com/search/decks?commanderName=<primary commander>&deckFormat=3&orderBy=-viewCount&page=N`
+> — for partner slots, also add `cardName=<other partner>` to the same query to pre-filter
+> server-side (cuts the candidate pool ~23x vs. `commanderName` alone) — (parsing
+> `__NEXT_DATA__`, incrementing `page` ourselves — do not follow the response's `next` field,
+> it's an internal-only URL) to collect candidate deck IDs. For partner slots, still discard
+> candidates where the other expected partner isn't `"Commander"`-tagged once fetched (see
+> 5.3-A notes — `cardName` only confirms the card is present, not that it's the declared
+> partner; ~12% of `cardName` matches were genuine in testing). Keep collecting up to
+> `config.decks_per_commander` (default 300; expect far fewer for Orysa, and expect to fetch
+> roughly 8x as many partner-slot candidates as you keep — record how many actually
+> exist/qualify for each slot). For each kept deck ID, fetch
+> `GET /api/decks/{id}/` directly (not via `mtg_parser` — we need metadata
+> `mtg_parser.parse_deck()` doesn't expose): pull `viewCount`/`updatedAt`/`createdAt` for the
+> `decks` row, resolve cards to `oracle_id` via `card.card.oracleCard.uid` (direct match, not
+> name lookup — log anything that doesn't resolve against our `cards` table, e.g. a card that
+> failed our commander-legal/paper filter), identify commander(s) via the `"Commander"`
+> category, exclude the commander(s) from `deck_cards`, store partner in `partner_oracle_id`,
+> and apply the deck's own
+> `includedInDeck` category flags to skip maybeboard/sideboard cards (same filtering logic
+> `mtg_parser.archidekt.ArchidektDeckParser._parse_deck()` uses — replicate it inline rather
+> than calling `mtg_parser` a second time on the same deck). Upsert into `decks` +
+> `deck_cards`, checkpointed/resumable by `(source, source_id)`, runnable per-slot. After
+> harvesting, compute `decks.precon_similarity` for slots whose commander shipped in a
+> precon (Kyler): Jaccard overlap between each deck and the official precon list (fetch the
+> precon decklist from Archidekt or store it as a fixture) — we need this for corpus QA and
+> the precon test. Devlog entry (deck counts per slot, unresolved-oracle-id stats,
+> precon-similarity distribution for Kyler).
 
 ### Task 5.4 — EDHREC commander pages
 Depends on: 5.2. **Do step A before step B.**
