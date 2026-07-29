@@ -240,6 +240,23 @@ GET https://archidekt.com/search/decks?commanderName=<url-encoded name>&deckForm
   for a partner slot — budget for that instead of treating a low yield as an error, same
   spirit as Orysa's expected-thin-corpus case.
 
+- **`colors` is an exact color-identity filter, and it's what makes the partner fallback
+  work.** `colors=WR` (a WUBRG-ordered letter string) returns only decks whose identity is
+  *exactly* WR — verified live by sampling 180 results each for
+  `commanderName=Yoshimaru, Ever Faithful&colors=WR` and the same for Bruse Tarl: **0** had
+  any U/B/G card and **0** had zero red. Without the param, 93 of 180 Yoshimaru decks had
+  off-colors. So it is neither a superset ("contains W and R") nor a subset ("fits within
+  WR") match.
+  **Why this matters**: a mono-white commander like Yoshimaru can only reach a WR identity by
+  being paired with a red partner. `commanderName=Yoshimaru, Ever Faithful&colors=WR`
+  therefore returns Yoshimaru decks whose *other* partner is red — confirmed by fetching the
+  top results: Yoshimaru + Rograkh, + Kediss, + Jeska. Those are the structurally closest
+  stand-ins when the exact pair we want has too few decks, which is exactly how task 5.3-B's
+  partner fallback uses it (Yoshimaru + Bruse Tarl has only 4 real decks; see
+  `harvest_slot()`). Note the two single-partner searches overlap on precisely the genuine
+  pair decks — measured: 4 shared ids between Yoshimaru's and Bruse Tarl's first 120 results,
+  the same 4 the exact-pair search finds — so the harvester dedups by deck id across passes.
+
 The response HTML embeds a `<script id="__NEXT_DATA__" type="application/json">...</script>`
 tag (same general technique the plan already anticipated for EDHREC via `pyedhrec` — see plan
 §3/Appendix A). Extract with a regex or a proper HTML parser, then read:

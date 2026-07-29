@@ -1,10 +1,13 @@
+from edhcut.db import connect
 from edhcut.ingest.archidekt import (
     _parse_next_data,
     card_oracle_id,
+    combined_color_identity,
     commander_cards,
     deck_log_line,
     included_cards,
     is_token,
+    slot_key_for,
 )
 
 
@@ -169,6 +172,33 @@ def test_deck_log_line_illegal_cards_truncates_names_at_five() -> None:
         "(Card 0, Card 1, Card 2, Card 3, Card 4), "
         "https://archidekt.com/decks/1/"
     )
+
+
+def test_slot_key_for_single_commander_is_the_bare_oracle_id() -> None:
+    assert slot_key_for(["krenko-uid"]) == "krenko-uid"
+
+
+def test_slot_key_for_partner_pair_joins_in_slot_order() -> None:
+    assert slot_key_for(["yoshi-uid", "bruse-uid"]) == "yoshi-uid+bruse-uid"
+
+
+def test_combined_color_identity_unions_partners_in_wubrg_order(tmp_path) -> None:
+    db_path = tmp_path / "edhcut.db"
+    with connect(db_path) as conn:
+        conn.executemany(
+            "INSERT INTO cards (oracle_id, name, color_identity) VALUES (?, ?, ?)",
+            [
+                ("yoshi-uid", "Yoshimaru, Ever Faithful", '["W"]'),
+                # Deliberately not in WUBRG order in the source data.
+                ("bruse-uid", "Bruse Tarl, Boorish Herder", '["R", "W"]'),
+                ("colorless-uid", "Sol Ring", "[]"),
+            ],
+        )
+        conn.commit()
+        assert combined_color_identity(conn, ["yoshi-uid"]) == "W"
+        assert combined_color_identity(conn, ["bruse-uid"]) == "WR"
+        assert combined_color_identity(conn, ["yoshi-uid", "bruse-uid"]) == "WR"
+        assert combined_color_identity(conn, ["colorless-uid"]) == ""
 
 
 def test_deck_log_line_multiple_problems_comma_separated() -> None:

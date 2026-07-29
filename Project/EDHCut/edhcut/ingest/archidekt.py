@@ -75,6 +75,7 @@ def search_deck_listings(
     other_partner: str | None = None,
     *,
     order_by: str = "-viewCount",
+    colors: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield candidate deck *listing* dicts, paging through Archidekt's search page ourselves.
 
@@ -84,6 +85,10 @@ def search_deck_listings(
     `other_partner`, if given, adds `cardName=` to pre-filter to decks containing that card
     somewhere (not necessarily as a declared commander — caller must still verify via the
     deck's own `"Commander"` category once fetched; see docs/archidekt_api.md).
+
+    `colors`, if given, adds `colors=` (a WUBRG-ordered string like "WR") to pre-filter to
+    decks of *exactly* that color identity — verified live to be an exact match, not a
+    superset/subset one (see docs/archidekt_api.md §2.2). Used by the partner-slot fallback.
     """
     page = 1
     while True:
@@ -95,6 +100,8 @@ def search_deck_listings(
         }
         if other_partner:
             params["cardName"] = other_partner
+        if colors:
+            params["colors"] = colors
 
         response = request_with_retry(session, "GET", SEARCH_URL, params=params)
         deck_results = _parse_next_data(response.text)["props"]["pageProps"]["deckResults"]
@@ -230,6 +237,34 @@ def _resolve_local_oracle_id(conn: sqlite3.Connection, card_name: str) -> str:
     return row[0]
 
 
+WUBRG = "WUBRG"
+
+
+def combined_color_identity(conn: sqlite3.Connection, oracle_ids: list[str]) -> str:
+    """Union of these cards' color identities, as a WUBRG-ordered string (e.g. "WR").
+
+    This is the format Archidekt's `colors=` search param takes. Canonical WUBRG ordering is
+    used so the same slot always produces the same query string.
+    """
+    letters: set[str] = set()
+    for oracle_id in oracle_ids:
+        row = conn.execute(
+            "SELECT color_identity FROM cards WHERE oracle_id = ?", (oracle_id,)
+        ).fetchone()
+        if row and row[0]:
+            letters.update(json.loads(row[0]))
+    return "".join(letter for letter in WUBRG if letter in letters)
+
+
+def slot_key_for(oracle_ids: list[str]) -> str:
+    """Stable identifier for a configured commander slot — a bare `oracle_id` for a single
+    commander, `"primary_id+partner_id"` for a partner pair (matching the `commander_key`
+    convention `edhrec_card_stats` already uses). Stored on every harvested deck so
+    partner-slot fallback decks (which run a *different* second commander) still group into
+    the pair's corpus."""
+    return "+".join(oracle_ids)
+
+
 @dataclass
 class FlaggedDeck:
     url: str
@@ -246,8 +281,16 @@ class SlotHarvestStats:
     decks_kept: int = 0
     cards_written: int = 0
     unresolved_oracle_ids: int = 0
+    # Partner slots only: how many of `decks_kept` ran the exact configured pair, before the
+    # single-partner colour-matched fallback topped the slot up (None for single-commander
+    # slots, and for partner slots the exact pair filled on its own).
+    exact_pair_decks: int | None = None
     flagged: list[FlaggedDeck] = field(default_factory=list)
     error: str | None = None
+
+    @property
+    def fallback_decks(self) -> int:
+        return 0 if self.exact_pair_decks is None else self.decks_kept - self.exact_pair_decks
 
 
 def _upsert_deck(
@@ -255,6 +298,7 @@ def _upsert_deck(
     deck: dict[str, Any],
     commander_oracle_id: str,
     partner_oracle_id: str | None,
+    slot_key: str,
 ) -> int:
     source = "archidekt"
     source_id = str(deck["id"])
@@ -263,13 +307,14 @@ def _upsert_deck(
     conn.execute(
         """
         INSERT INTO decks (
-            source, source_id, url, commander_oracle_id, partner_oracle_id,
+            source, source_id, url, commander_oracle_id, partner_oracle_id, slot_key,
             fetched_at, views, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source, source_id) DO UPDATE SET
             url = excluded.url,
             commander_oracle_id = excluded.commander_oracle_id,
             partner_oracle_id = excluded.partner_oracle_id,
+            slot_key = excluded.slot_key,
             fetched_at = excluded.fetched_at,
             views = excluded.views,
             updated_at = excluded.updated_at
@@ -280,6 +325,7 @@ def _upsert_deck(
             url,
             commander_oracle_id,
             partner_oracle_id,
+            slot_key,
             fetched_at,
             deck.get("viewCount"),
             deck.get("updatedAt"),
@@ -356,6 +402,128 @@ def _write_deck_cards(conn: sqlite3.Connection, deck_id: int, quantities: dict[s
     return len(rows)
 
 
+def _harvest_pass(
+    conn: sqlite3.Connection,
+    session: RateLimitedSession,
+    listings: Iterator[dict[str, Any]],
+    *,
+    required_ids: set[str],
+    searched_oracle_id: str,
+    slot_key: str,
+    known_oracle_ids: set[str],
+    stale_cutoff: datetime,
+    stop_at_total: int,
+    stats: SlotHarvestStats,
+    seen_source_ids: set[str],
+    flag_mismatches: bool,
+    log_label: str,
+    pbar: Any,
+    log_file: TextIO | None,
+) -> None:
+    """Run one search's worth of candidates, keeping decks until `stats.decks_kept` reaches
+    `stop_at_total`. Mutates `stats`/`seen_source_ids` in place; shared by the exact-pair pass
+    and the partner-fallback passes (see `harvest_slot`)."""
+    for listing in listings:
+        if stats.decks_kept >= stop_at_total:
+            return
+
+        source_id = str(listing["id"])
+        # A deck can legitimately surface in more than one pass — most obviously the exact
+        # partner-pair decks, which also match both single-partner fallback searches. Skip
+        # before spending a request on the deck detail, and don't let it count twice.
+        if source_id in seen_source_ids:
+            continue
+
+        stats.candidates_checked += 1
+        pbar.set_postfix(
+            checked=stats.candidates_checked,
+            stale=stats.stale_skipped,
+            mismatch=stats.commander_mismatch_rejected,
+            bad_size=stats.invalid_size_rejected,
+            unresolved=stats.unresolved_oracle_ids,
+            refresh=False,
+        )
+
+        updated_at = listing.get("updatedAt")
+        if updated_at and _parse_archidekt_datetime(updated_at) < stale_cutoff:
+            stats.stale_skipped += 1
+            seen_source_ids.add(source_id)
+            _write_log(log_file, deck_log_line(log_label, deck_url(listing["id"]), stale=True))
+            continue
+
+        deck = fetch_deck(session, listing["id"])
+        seen_source_ids.add(source_id)
+        deck_commander_ids = [card_oracle_id(c) for c in commander_cards(deck)]
+
+        if not required_ids <= set(deck_commander_ids):
+            stats.commander_mismatch_rejected += 1
+            _write_log(log_file, deck_log_line(log_label, deck_url(deck["id"]), mismatch=True))
+            # For single-commander slots this is genuinely unexpected (the search already
+            # filtered by commanderName) — worth a look. For the exact-pair partner pass,
+            # most cardName matches are routine non-partnerships (see docs/archidekt_api.md),
+            # so flagging every one would be noise, not signal.
+            if flag_mismatches:
+                stats.flagged.append(FlaggedDeck(
+                    url=deck_url(deck["id"]),
+                    reason="matched commander search but the searched commander isn't "
+                           "\"Commander\"-tagged in the fetched deck",
+                ))
+            continue
+
+        # A deck must have *exactly* the right physical card count (100 total including its
+        # commander(s), so 99 library cards for a single commander / 98 for a pair) to be
+        # considered valid. Derived from the deck's *own* declared commander count rather
+        # than the slot's, since a fallback deck runs a different second commander than the
+        # slot names. Anything else is silently excluded, not flagged — a routine filter,
+        # not an anomaly worth manual review. See `included_cards()` for the
+        # maybeboard/sideboard/token handling this depends on, and quantity-summed (not
+        # row-counted) per the same "30 Mountain is 1 row but 30 cards" fix as before.
+        expected_library_size = 100 - len(deck_commander_ids)
+        result = _compute_deck_cards(
+            deck, exclude_oracle_ids=set(deck_commander_ids), known_oracle_ids=known_oracle_ids
+        )
+        if result.total_physical_cards != expected_library_size:
+            stats.invalid_size_rejected += 1
+            _write_log(log_file, deck_log_line(
+                log_label, deck_url(deck["id"]),
+                wrong_size=True,
+                illegal_count=result.unresolved_count,
+                illegal_names=result.unresolved_names,
+            ))
+            continue
+
+        # The searched commander always lands in `commander_oracle_id`; whatever else the
+        # deck declares as a commander goes in `partner_oracle_id`. For the exact-pair pass
+        # that reproduces the slot's own pair; for a fallback pass it records the deck's real
+        # other commander (e.g. Kediss, not Bruse) — `slot_key` is what ties it to the slot.
+        others = [oid for oid in deck_commander_ids if oid != searched_oracle_id]
+        stats.decks_kept += 1
+        deck_pk = _upsert_deck(
+            conn, deck, searched_oracle_id, others[0] if others else None, slot_key
+        )
+        rows_written = _write_deck_cards(conn, deck_pk, result.quantities)
+        stats.cards_written += rows_written
+        stats.unresolved_oracle_ids += result.unresolved_count
+        pbar.update(1)
+        _write_log(log_file, deck_log_line(
+            log_label, deck_url(deck["id"]),
+            illegal_count=result.unresolved_count,
+            illegal_names=result.unresolved_names,
+        ))
+
+        if (
+            result.unresolved_quantity
+            and result.unresolved_quantity / result.total_physical_cards
+            > UNRESOLVED_RATIO_FLAG_THRESHOLD
+        ):
+            stats.flagged.append(FlaggedDeck(
+                url=deck_url(deck["id"]),
+                reason=f"{result.unresolved_quantity}/{result.total_physical_cards} cards "
+                       f"unresolved ({result.unresolved_quantity / result.total_physical_cards:.0%}) "
+                       "— may be more than just banned/restricted cards, worth a look",
+            ))
+
+
 def harvest_slot(
     conn: sqlite3.Connection,
     session: RateLimitedSession,
@@ -367,18 +535,37 @@ def harvest_slot(
     show_progress: bool = True,
     log_file: TextIO | None = None,
 ) -> SlotHarvestStats:
+    """Harvest one configured commander slot up to `decks_per_commander` decks.
+
+    Single-commander slots run a single search. **Partner slots** run up to three passes,
+    because Archidekt rarely has enough decks running an exact partner pair (Yoshimaru +
+    Bruse Tarl had just 4):
+
+    1. *Exact pair* — `commanderName=<primary>&cardName=<partner>`, keeping only decks where
+       both are `"Commander"`-tagged. These are true pair decks.
+    2. *Fallback*, only if pass 1 came up short — for each partner separately,
+       `commanderName=<that partner>&colors=<the pair's combined color identity>`, keeping
+       decks where just that one partner is `"Commander"`-tagged. Because the color filter is
+       an exact match, these are decks running that partner alongside some *other* partner
+       that lands on the same colors (e.g. Yoshimaru + Kediss instead of + Bruse Tarl) —
+       structurally the closest available stand-ins. The remaining quota is split evenly
+       between the two partners, and if one runs dry the other picks up the slack.
+
+    Fallback decks are stored with their real commanders; `decks.slot_key` is what groups
+    them into this slot's corpus.
+    """
     primary, *rest = commander_names
     other_partner = rest[0] if rest else None
     is_partner_slot = other_partner is not None
     stats = SlotHarvestStats(slot_label=" + ".join(commander_names))
 
     expected_oracle_ids = {name: _resolve_local_oracle_id(conn, name) for name in commander_names}
-    required_ids = set(expected_oracle_ids.values())
-    commander_oracle_id = expected_oracle_ids[primary]
-    partner_oracle_id = expected_oracle_ids[other_partner] if other_partner else None
-    expected_library_size = 100 - len(commander_names)
+    slot_oracle_ids = [expected_oracle_ids[name] for name in commander_names]
+    slot_key = slot_key_for(slot_oracle_ids)
+    required_ids = set(slot_oracle_ids)
 
     stale_cutoff = datetime.now(timezone.utc) - timedelta(days=staleness_cutoff_days)
+    seen_source_ids: set[str] = set()
 
     pbar = tqdm(
         total=decks_per_commander,
@@ -387,86 +574,54 @@ def harvest_slot(
         disable=not show_progress,
     )
     try:
-        for listing in search_deck_listings(session, primary, other_partner):
-            if stats.decks_kept >= decks_per_commander:
-                break
-            stats.candidates_checked += 1
-            pbar.set_postfix(
-                checked=stats.candidates_checked,
-                stale=stats.stale_skipped,
-                mismatch=stats.commander_mismatch_rejected,
-                bad_size=stats.invalid_size_rejected,
-                unresolved=stats.unresolved_oracle_ids,
-                refresh=False,
-            )
+        _harvest_pass(
+            conn, session,
+            search_deck_listings(session, primary, other_partner),
+            required_ids=required_ids,
+            searched_oracle_id=expected_oracle_ids[primary],
+            slot_key=slot_key,
+            known_oracle_ids=known_oracle_ids,
+            stale_cutoff=stale_cutoff,
+            stop_at_total=decks_per_commander,
+            stats=stats,
+            seen_source_ids=seen_source_ids,
+            flag_mismatches=not is_partner_slot,
+            log_label=stats.slot_label,
+            pbar=pbar,
+            log_file=log_file,
+        )
 
-            updated_at = listing.get("updatedAt")
-            if updated_at and _parse_archidekt_datetime(updated_at) < stale_cutoff:
-                stats.stale_skipped += 1
-                _write_log(log_file, deck_log_line(stats.slot_label, deck_url(listing["id"]), stale=True))
-                continue
-
-            deck = fetch_deck(session, listing["id"])
-            commander_ids = {card_oracle_id(c) for c in commander_cards(deck)}
-
-            if not required_ids <= commander_ids:
-                stats.commander_mismatch_rejected += 1
-                _write_log(log_file, deck_log_line(stats.slot_label, deck_url(deck["id"]), mismatch=True))
-                # For single-commander slots this is genuinely unexpected (the search already
-                # filtered by commanderName) — worth a look. For partner slots, most
-                # cardName matches are routine non-partnerships (see docs/archidekt_api.md),
-                # so flagging every one would be noise, not signal.
-                if not is_partner_slot:
-                    stats.flagged.append(FlaggedDeck(
-                        url=deck_url(deck["id"]),
-                        reason="matched commander search but the searched commander isn't "
-                               "\"Commander\"-tagged in the fetched deck",
-                    ))
-                continue
-
-            # A deck must have *exactly* the right physical card count (99 library cards for
-            # a single commander, 98 for a partner pair — 100 total including commander(s))
-            # to be considered valid. Anything else is silently excluded, not flagged — a
-            # routine filter, not an anomaly worth manual review. See `included_cards()` for
-            # the maybeboard/sideboard/token handling this depends on, and quantity-summed
-            # (not row-counted) per the same "30 Mountain is 1 row but 30 cards" fix as
-            # before.
-            result = _compute_deck_cards(
-                deck, exclude_oracle_ids=required_ids, known_oracle_ids=known_oracle_ids
-            )
-            if result.total_physical_cards != expected_library_size:
-                stats.invalid_size_rejected += 1
-                _write_log(log_file, deck_log_line(
-                    stats.slot_label, deck_url(deck["id"]),
-                    wrong_size=True,
-                    illegal_count=result.unresolved_count,
-                    illegal_names=result.unresolved_names,
-                ))
-                continue
-
-            stats.decks_kept += 1
-            deck_pk = _upsert_deck(conn, deck, commander_oracle_id, partner_oracle_id)
-            rows_written = _write_deck_cards(conn, deck_pk, result.quantities)
-            stats.cards_written += rows_written
-            stats.unresolved_oracle_ids += result.unresolved_count
-            pbar.update(1)
-            _write_log(log_file, deck_log_line(
-                stats.slot_label, deck_url(deck["id"]),
-                illegal_count=result.unresolved_count,
-                illegal_names=result.unresolved_names,
-            ))
-
-            if (
-                result.unresolved_quantity
-                and result.unresolved_quantity / result.total_physical_cards
-                > UNRESOLVED_RATIO_FLAG_THRESHOLD
-            ):
-                stats.flagged.append(FlaggedDeck(
-                    url=deck_url(deck["id"]),
-                    reason=f"{result.unresolved_quantity}/{result.total_physical_cards} cards "
-                           f"unresolved ({result.unresolved_quantity / result.total_physical_cards:.0%}) "
-                           "— may be more than just banned/restricted cards, worth a look",
-                ))
+        if is_partner_slot and stats.decks_kept < decks_per_commander:
+            stats.exact_pair_decks = stats.decks_kept
+            colors = combined_color_identity(conn, slot_oracle_ids)
+            # Split what's left evenly, then run each partner again with whatever the pair
+            # still owes — so if the first partner's search runs dry, the second one absorbs
+            # its shortfall, and the third pass lets the first absorb the second's.
+            half = (decks_per_commander - stats.decks_kept) // 2
+            targets = [
+                (primary, stats.decks_kept + half),
+                (other_partner, decks_per_commander),
+                (primary, decks_per_commander),
+            ]
+            for partner_name, stop_at_total in targets:
+                if stats.decks_kept >= decks_per_commander:
+                    break
+                _harvest_pass(
+                    conn, session,
+                    search_deck_listings(session, partner_name, colors=colors),
+                    required_ids={expected_oracle_ids[partner_name]},
+                    searched_oracle_id=expected_oracle_ids[partner_name],
+                    slot_key=slot_key,
+                    known_oracle_ids=known_oracle_ids,
+                    stale_cutoff=stale_cutoff,
+                    stop_at_total=stop_at_total,
+                    stats=stats,
+                    seen_source_ids=seen_source_ids,
+                    flag_mismatches=False,
+                    log_label=f"{stats.slot_label} [fallback: {partner_name} @ {colors}]",
+                    pbar=pbar,
+                    log_file=log_file,
+                )
     except Exception as exc:  # noqa: BLE001 - deliberately broad: this is a top-level harvest loop
         stats.error = (
             f"Harvest of slot {stats.slot_label!r} stopped after {stats.candidates_checked} "
@@ -493,6 +648,11 @@ def _write_ingest_log(conn: sqlite3.Connection, stats: SlotHarvestStats) -> None
             f"invalid_size_rejected={stats.invalid_size_rejected} "
             f"decks_kept={stats.decks_kept} cards_written={stats.cards_written} "
             f"flagged={len(stats.flagged)}"
+            + (
+                f" exact_pair_decks={stats.exact_pair_decks} "
+                f"fallback_decks={stats.fallback_decks}"
+                if stats.exact_pair_decks is not None else ""
+            )
             + (f" error={stats.error!r}" if stats.error else ""),
         ),
     )
@@ -546,6 +706,11 @@ def _print_summary(stats: SlotHarvestStats) -> None:
         f"{stats.cards_written} card rows written, "
         f"{stats.unresolved_oracle_ids} unresolved oracle_ids"
     )
+    if stats.exact_pair_decks is not None:
+        print(
+            f"  Partner fallback used: {stats.exact_pair_decks} decks run the exact pair, "
+            f"{stats.fallback_decks} run one partner at the pair's color identity"
+        )
     if stats.flagged:
         print(f"  Flagged for manual review ({len(stats.flagged)}):")
         for flag in stats.flagged:

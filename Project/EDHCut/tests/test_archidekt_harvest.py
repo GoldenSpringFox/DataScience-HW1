@@ -115,20 +115,56 @@ class FakeArchidektSession:
         return _FakeResponse(json_data=self._decks[deck_id])
 
 
+class FakeMultiSearchSession:
+    """Like FakeArchidektSession, but routes each search to its own page list by the params
+    that distinguish the harvester's passes: `cardName` (exact-pair pass) and `colors`
+    (single-partner fallback pass).
+
+    `searches` is keyed by `(commanderName, cardName, colors)` — use None for an absent
+    param — and maps to that search's list of page HTML strings.
+    """
+
+    def __init__(self, searches: dict[tuple, list[str]], decks: dict[int, dict]):
+        self._searches = searches
+        self._decks = decks
+        self.deck_requests: list[int] = []
+        self.search_requests: list[tuple] = []
+
+    def request(self, method, url, params=None, **kwargs):
+        if "search/decks" in url:
+            key = (params.get("commanderName"), params.get("cardName"), params.get("colors"))
+            self.search_requests.append(key)
+            pages = self._searches.get(key)
+            if pages is None:
+                raise AssertionError(f"unexpected search {key!r}; known: {list(self._searches)}")
+            page = params["page"]
+            # Out-of-range page = search exhausted; mirror Archidekt returning no results.
+            if page > len(pages):
+                return _FakeResponse(text=_next_data_html([], has_next=False))
+            return _FakeResponse(text=pages[page - 1])
+        deck_id = int(url.rstrip("/").rsplit("/", 1)[-1])
+        self.deck_requests.append(deck_id)
+        return _FakeResponse(json_data=self._decks[deck_id])
+
+
 @pytest.fixture
 def db_with_cards(tmp_path):
     db_path = tmp_path / "edhcut.db"
     with connect(db_path) as conn:
         conn.executemany(
-            "INSERT INTO cards (oracle_id, name, legal_commander) VALUES (?, ?, 1)",
+            "INSERT INTO cards (oracle_id, name, color_identity, legal_commander) "
+            "VALUES (?, ?, ?, 1)",
             [
-                ("krenko-uid", "Krenko, Mob Boss"),
-                ("yoshi-uid", "Yoshimaru, Ever Faithful"),
-                ("bruse-uid", "Bruse Tarl, Boorish Herder"),
-                ("sol-ring-uid", "Sol Ring"),
-                ("recruiter-uid", "Goblin Recruiter"),
-                ("filler-uid", "Filler Land"),
-                ("mountain-uid", "Mountain"),
+                ("krenko-uid", "Krenko, Mob Boss", '["R"]'),
+                ("yoshi-uid", "Yoshimaru, Ever Faithful", '["W"]'),
+                ("bruse-uid", "Bruse Tarl, Boorish Herder", '["R", "W"]'),
+                # Stand-in partners a fallback pass can turn up alongside Yoshimaru/Bruse.
+                ("kediss-uid", "Kediss, Emberclaw Familiar", '["R"]'),
+                ("jeska-uid", "Jeska, Thrice Reborn", '["R"]'),
+                ("sol-ring-uid", "Sol Ring", "[]"),
+                ("recruiter-uid", "Goblin Recruiter", '["R"]'),
+                ("filler-uid", "Filler Land", "[]"),
+                ("mountain-uid", "Mountain", "[]"),
             ],
         )
         conn.executemany(
@@ -530,3 +566,191 @@ def test_error_mid_slot_is_captured_not_raised(db_with_cards) -> None:
     assert stats.error is not None
     assert "Krenko" in stats.error
     assert "simulated network failure" in stats.error
+
+
+# --- Partner-slot fallback: when too few decks run the exact pair, top up with decks running
+# --- one partner at the pair's combined color identity. See harvest_slot()'s docstring.
+
+YOSHI_BRUSE = ["Yoshimaru, Ever Faithful", "Bruse Tarl, Boorish Herder"]
+YOSHI_BRUSE_SLOT_KEY = "yoshi-uid+bruse-uid"
+# Search keys for FakeMultiSearchSession: (commanderName, cardName, colors).
+EXACT_PAIR_SEARCH = ("Yoshimaru, Ever Faithful", "Bruse Tarl, Boorish Herder", None)
+YOSHI_FALLBACK_SEARCH = ("Yoshimaru, Ever Faithful", None, "WR")
+BRUSE_FALLBACK_SEARCH = ("Bruse Tarl, Boorish Herder", None, "WR")
+
+PARTNER_KNOWN_IDS = {
+    "yoshi-uid", "bruse-uid", "kediss-uid", "jeska-uid", "filler-uid", "sol-ring-uid",
+}
+
+
+def _pair_deck(deck_id: int) -> dict:
+    """A genuine Yoshimaru + Bruse Tarl deck (2 commanders + 98 library cards)."""
+    return _deck_json(
+        deck_id,
+        commander_uid="yoshi-uid", commander_name="Yoshimaru, Ever Faithful",
+        partner_uid="bruse-uid", partner_name="Bruse Tarl, Boorish Herder",
+        extra_cards=[_filler(98)],
+    )
+
+
+def _yoshi_fallback_deck(deck_id: int) -> dict:
+    """Yoshimaru alongside a *different* red partner — what the fallback search turns up."""
+    return _deck_json(
+        deck_id,
+        commander_uid="yoshi-uid", commander_name="Yoshimaru, Ever Faithful",
+        partner_uid="kediss-uid", partner_name="Kediss, Emberclaw Familiar",
+        extra_cards=[_filler(98)],
+    )
+
+
+def _bruse_fallback_deck(deck_id: int) -> dict:
+    return _deck_json(
+        deck_id,
+        commander_uid="bruse-uid", commander_name="Bruse Tarl, Boorish Herder",
+        partner_uid="jeska-uid", partner_name="Jeska, Thrice Reborn",
+        extra_cards=[_filler(98)],
+    )
+
+
+def _one_page(deck_ids: list[int]) -> list[str]:
+    return [_next_data_html([_listing(i, RECENT) for i in deck_ids], has_next=False)]
+
+
+def test_partner_slot_does_not_use_fallback_when_exact_pairs_suffice(db_with_cards) -> None:
+    conn = db_with_cards
+    session = FakeMultiSearchSession(
+        searches={EXACT_PAIR_SEARCH: _one_page([1, 2, 3, 4])},
+        decks={i: _pair_deck(i) for i in (1, 2, 3, 4)},
+    )
+    stats = harvest_slot(
+        conn, session, YOSHI_BRUSE, PARTNER_KNOWN_IDS,
+        decks_per_commander=4, staleness_cutoff_days=730, show_progress=False,
+    )
+    assert stats.decks_kept == 4
+    # Quota met by the exact pair alone -> no fallback search issued at all.
+    assert stats.exact_pair_decks is None
+    assert stats.fallback_decks == 0
+    assert session.search_requests == [EXACT_PAIR_SEARCH]
+
+
+def test_partner_fallback_splits_remaining_quota_evenly_between_partners(db_with_cards) -> None:
+    # 2 exact pairs found against a quota of 10 -> 8 remaining -> 4 to each partner.
+    conn = db_with_cards
+    decks = {1: _pair_deck(1), 2: _pair_deck(2)}
+    decks.update({i: _yoshi_fallback_deck(i) for i in range(10, 20)})
+    decks.update({i: _bruse_fallback_deck(i) for i in range(30, 40)})
+    session = FakeMultiSearchSession(
+        searches={
+            EXACT_PAIR_SEARCH: _one_page([1, 2]),
+            YOSHI_FALLBACK_SEARCH: _one_page(list(range(10, 20))),
+            BRUSE_FALLBACK_SEARCH: _one_page(list(range(30, 40))),
+        },
+        decks=decks,
+    )
+    stats = harvest_slot(
+        conn, session, YOSHI_BRUSE, PARTNER_KNOWN_IDS,
+        decks_per_commander=10, staleness_cutoff_days=730, show_progress=False,
+    )
+    assert stats.decks_kept == 10
+    assert stats.exact_pair_decks == 2
+    assert stats.fallback_decks == 8
+
+    kept_ids = {int(r[0]) for r in conn.execute(
+        "SELECT source_id FROM decks WHERE slot_key = ?", (YOSHI_BRUSE_SLOT_KEY,)
+    )}
+    assert len(kept_ids) == 10
+    # Neither partner exceeded its half: ids 10-19 are Yoshimaru's, 30-39 are Bruse's.
+    assert len(kept_ids & set(range(10, 20))) == 4
+    assert len(kept_ids & set(range(30, 40))) == 4
+
+
+def test_partner_fallback_rolls_shortfall_over_to_the_other_partner(db_with_cards) -> None:
+    # Quota 10, 2 exact pairs -> 8 remaining -> 4 each. Yoshimaru's search holds only 1 deck,
+    # so Bruse must absorb the other 7 rather than stopping at its own half of 4.
+    conn = db_with_cards
+    decks = {1: _pair_deck(1), 2: _pair_deck(2), 10: _yoshi_fallback_deck(10)}
+    decks.update({i: _bruse_fallback_deck(i) for i in range(30, 45)})
+    session = FakeMultiSearchSession(
+        searches={
+            EXACT_PAIR_SEARCH: _one_page([1, 2]),
+            YOSHI_FALLBACK_SEARCH: _one_page([10]),
+            BRUSE_FALLBACK_SEARCH: _one_page(list(range(30, 45))),
+        },
+        decks=decks,
+    )
+    stats = harvest_slot(
+        conn, session, YOSHI_BRUSE, PARTNER_KNOWN_IDS,
+        decks_per_commander=10, staleness_cutoff_days=730, show_progress=False,
+    )
+    assert stats.decks_kept == 10
+    assert stats.exact_pair_decks == 2
+    assert stats.fallback_decks == 8
+    kept_ids = {int(r[0]) for r in conn.execute("SELECT source_id FROM decks")}
+    assert 10 in kept_ids  # Yoshimaru's only fallback deck was taken
+    assert len(kept_ids & set(range(30, 45))) == 7  # Bruse covered the rest
+
+
+def test_partner_fallback_stores_real_commanders_and_slot_key(db_with_cards) -> None:
+    conn = db_with_cards
+    session = FakeMultiSearchSession(
+        searches={
+            EXACT_PAIR_SEARCH: _one_page([]),
+            YOSHI_FALLBACK_SEARCH: _one_page([10]),
+            BRUSE_FALLBACK_SEARCH: _one_page([]),
+        },
+        decks={10: _yoshi_fallback_deck(10)},
+    )
+    stats = harvest_slot(
+        conn, session, YOSHI_BRUSE, PARTNER_KNOWN_IDS,
+        decks_per_commander=2, staleness_cutoff_days=730, show_progress=False,
+    )
+    assert stats.decks_kept == 1
+    row = conn.execute(
+        "SELECT commander_oracle_id, partner_oracle_id, slot_key FROM decks"
+    ).fetchone()
+    # The deck's *real* commanders are recorded (Kediss, not Bruse Tarl); slot_key is what
+    # ties it back to the Yoshimaru + Bruse Tarl corpus.
+    assert row == ("yoshi-uid", "kediss-uid", YOSHI_BRUSE_SLOT_KEY)
+    # The stand-in partner is a commander, so it must not also count as a library card.
+    card_ids = {r[0] for r in conn.execute("SELECT oracle_id FROM deck_cards")}
+    assert card_ids == {"filler-uid"}
+
+
+def test_exact_pair_deck_is_not_double_counted_by_fallback_searches(db_with_cards) -> None:
+    # A genuine pair deck matches all three searches. It must be kept once, and the fallback
+    # must not re-fetch it (dedup happens on the listing, before the deck request).
+    conn = db_with_cards
+    session = FakeMultiSearchSession(
+        searches={
+            EXACT_PAIR_SEARCH: _one_page([1]),
+            YOSHI_FALLBACK_SEARCH: _one_page([1, 10]),
+            BRUSE_FALLBACK_SEARCH: _one_page([1]),
+        },
+        decks={1: _pair_deck(1), 10: _yoshi_fallback_deck(10)},
+    )
+    stats = harvest_slot(
+        conn, session, YOSHI_BRUSE, PARTNER_KNOWN_IDS,
+        decks_per_commander=5, staleness_cutoff_days=730, show_progress=False,
+    )
+    assert stats.decks_kept == 2
+    assert conn.execute("SELECT COUNT(*) FROM decks").fetchone()[0] == 2
+    assert session.deck_requests.count(1) == 1
+
+
+def test_single_commander_slot_stores_bare_oracle_id_as_slot_key(db_with_cards) -> None:
+    conn = db_with_cards
+    session = FakeArchidektSession(
+        search_pages=[_next_data_html([_listing(2, RECENT)], has_next=False)],
+        decks={2: _deck_json(
+            2, commander_uid="krenko-uid", commander_name="Krenko, Mob Boss",
+            extra_cards=[_filler(99)],
+        )},
+    )
+    stats = harvest_slot(
+        conn, session, ["Krenko, Mob Boss"], {"krenko-uid", "filler-uid"},
+        decks_per_commander=10, staleness_cutoff_days=730, show_progress=False,
+    )
+    assert stats.decks_kept == 1
+    assert stats.exact_pair_decks is None  # not a partner slot -> no fallback bookkeeping
+    row = conn.execute("SELECT slot_key, partner_oracle_id FROM decks").fetchone()
+    assert row == ("krenko-uid", None)
