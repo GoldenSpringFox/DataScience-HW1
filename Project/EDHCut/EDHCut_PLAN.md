@@ -218,8 +218,8 @@ write `docs/devlog/<task-id>-<slug>.md` following the template. If a run produce
 | Source | Status | Notes |
 |---|---|---|
 | **Scryfall (cards + oracle_tags bulk)** | ✅ Explicitly permitted — bulk files exist precisely for this. | Identifying `User-Agent`, cache ≥24 h. Don't hotlink card images at scale; use their image CDN per guidelines when the frontend needs images. |
-| **EDHREC** | ⚠️ No official API; Next.js data routes are undocumented. Check `edhrec.com/robots.txt` + ToS in task 5.4-A before fetching. | Volume is tiny at our scope: one page fetch per commander slot, cached for weeks, identifying UA. |
-| **Archidekt** | ⚠️ Real REST endpoints used by their own frontend, historically tolerated for respectful use. Check robots.txt/ToS in task 5.3-A. | ~1 req/s, checkpointed, decks cached permanently. A few hundred requests total at our scope. |
+| **EDHREC** | ⚠️ No official API; Next.js data routes are undocumented. Check `edhrec.com/robots.txt` + ToS in task 5.4-A before fetching. | Volume is tiny at our scope: one page fetch per commander slot, ≥1 req/2s, cached two weeks, identifying UA. |
+| **Archidekt** | ⚠️ Real REST endpoints used by their own frontend, historically tolerated for respectful use. Check robots.txt/ToS in task 5.3-A. | ≥1 req/2s (wider margin than the tolerated floor), checkpointed, decks re-cached every two weeks. A few hundred requests total at our scope. |
 | **General** | Card names/text are WotC IP under the Fan Content Policy (unmonetized fan projects fine). Ship only *derived* artifacts (scores, clusters), never republished raw EDHREC/Archidekt dumps. | |
 
 ---
