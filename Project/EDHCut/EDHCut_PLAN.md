@@ -1,4 +1,4 @@
-# DeckCut — Architecture & Phased Build Plan (v2)
+# EDHCut — Architecture & Phased Build Plan (v2)
 
 A data-driven tool that helps Commander (EDH) players cut cards from their decks.
 Given a decklist + a candidate card to add, it suggests which card to cut, surfaces other
@@ -43,7 +43,7 @@ throughout (DB already stores `partner_oracle_id`).
 
 | Store | What lives there | Why |
 |---|---|---|
-| **SQLite** (`data/deckcut.db`) | All relational/source data: cards, decks, deck_cards, tags, EDHREC stats | Zero-ops, single file, ships as a read-only artifact to the free-tier host, trivially inspectable with pandas/DB Browser |
+| **SQLite** (`data/edhcut.db`) | All relational/source data: cards, decks, deck_cards, tags, EDHREC stats | Zero-ops, single file, ships as a read-only artifact to the free-tier host, trivially inspectable with pandas/DB Browser |
 | **Parquet / scipy `.npz`** (`data/kb/<version>/`) | Derived knowledge base: co-occurrence matrices, embeddings, clusters, text-mined features, archetype definitions | Columnar/sparse formats load fast; matches existing notebook conventions |
 | **HTTP cache** (`data/http_cache.sqlite`) | Raw responses from remote sources via `requests-cache` | Free resumability; never re-hit a source for data we already have |
 
@@ -108,7 +108,7 @@ data/kb/<version>/
   archetypes.parquet       # per-slot archetype definitions: centroids + role quotas
 ```
 
-A single loader module (`deckcut/kb.py`) exposes these behind a `KnowledgeBase` class so
+A single loader module (`edhcut/kb.py`) exposes these behind a `KnowledgeBase` class so
 phase 3 code never touches file paths directly. Versioned directories make refreshes atomic.
 
 ### 2.5 Data flow
@@ -126,9 +126,9 @@ EDHREC JSON ────────────┘                             
 ### 2.6 Repo layout
 
 ```
-Project/deckcut/
+EDHCut/
   pyproject.toml
-  deckcut/
+  edhcut/
     config.py            # commander slots, paths, rate limits
     http.py              # shared session: requests-cache + tenacity + User-Agent
     db.py                # schema DDL + connection helpers
@@ -154,7 +154,7 @@ Project/deckcut/
 
 | Source | Access method | Decision |
 |---|---|---|
-| **Scryfall cards** | Official bulk `oracle_cards` dump. | ✅ Settled; already prototyped in `Project/EDHDataAnalysis.ipynb`. |
+| **Scryfall cards** | Official bulk `oracle_cards` dump. | ✅ Settled; already prototyped in `Analysis/EDHDataAnalysis.ipynb`. |
 | **Scryfall Tagger** | **Official `oracle_tags` bulk data file** (18.2 MB, updated daily, listed at `api.scryfall.com/bulk-data`, documented at scryfall.com/docs/api/tags). Tag objects carry a `taggings` array keyed by `oracle_id`; parent tags require traversing `child_ids`. | ✅ **No scraping needed at all.** The GraphQL/CSRF approach from plan v1 is obsolete — deleted. |
 | **Archidekt** | [`pyrchidekt`](https://github.com/linkian209/pyrchidekt) (MIT, last commit 2025-10, v2.2.0): typed dataclasses for **deck-by-id fetch only** — no search. | **Hybrid**: use `pyrchidekt` for fetching/parsing individual decks (its dataclasses handle the category/board structure); use raw `requests` against the deck **search** endpoint (`archidekt.com/api/decks/v3/?...`), which the wrapper doesn't cover. Verify search params in task 5.3-A. Note: pyrchidekt issues its own HTTP calls, so our rate limiting wraps *around* its calls (sleep between fetches), not inside them. |
 | **EDHREC** | [`pyedhrec`](https://github.com/stainedhat/pyedhrec) (last commit **2024-02**, effectively unmaintained): scrapes the EDHREC homepage for the current Next.js build ID, then hits `/_next/data/<build_id>/commanders/<slug>.json` routes; also `json.edhrec.com/cards/<name>` for card details. In-memory cache only, no session injection. | **Reference implementation, not a dependency.** The build-ID discovery trick is the right technique and self-heals across EDHREC deploys — reimplement it (~30 lines) inside our own `requests-cache` session in task 5.4. Test pyedhrec live first in 5.4-A: if its parsing still matches today's page shape, copy its response-parsing logic too. |
@@ -232,15 +232,15 @@ Riskiest parts: **undocumented Archidekt/EDHREC endpoints** (verify before build
 ### Task 5.1 — Project scaffold + DB schema + HTTP client
 Depends on: nothing.
 
-> **Prompt:** Read `Project/DECKCUT_PLAN.md` (§1, §2.3, §2.6, §4). Create the
-> `Project/deckcut/` package scaffold: `pyproject.toml` (deps: requests, requests-cache,
-> tenacity, pandas, pyarrow, tqdm, pyrchidekt), `deckcut/config.py` (dataclass with:
+> **Prompt:** Read `EDHCut/EDHCut_PLAN.md` (§1, §2.3, §2.6, §4). Create the
+> `EDHCut` package scaffold: `pyproject.toml` (deps: requests, requests-cache,
+> tenacity, pandas, pyarrow, tqdm, pyrchidekt), `edhcut/config.py` (dataclass with:
 > commander slots as lists of card names —
 > `[["Krenko, Mob Boss"], ["Kyler, Sigardian Emissary"], ["Yoshimaru, Ever Faithful",
 > "Bruse Tarl, Boorish Herder"], ["Yenna, Redtooth Regent"], ["Orysa, Tide Choreographer"]]`
 > — data paths, per-source rate-limit settings, User-Agent
-> "DeckCut/0.1 (avivg2001@gmail.com)"), `deckcut/db.py` (idempotent schema creation from
-> §2.3, context-manager connection helper), and `deckcut/http.py` (a
+> "EDHCut/0.1 (avivg2001@gmail.com)"), `edhcut/db.py` (idempotent schema creation from
+> §2.3, context-manager connection helper), and `edhcut/http.py` (a
 > `get_session(source_name)` factory returning a requests-cache CachedSession with
 > per-source cache expiry, tenacity retry with exponential backoff on 429/5xx, enforced
 > minimum delay between requests, and the UA header). Create `docs/devlog/TEMPLATE.md`
@@ -251,22 +251,22 @@ Depends on: nothing.
 ### Task 5.2 — Scryfall ingest + name resolution table
 Depends on: 5.1. 📊
 
-> **Prompt:** Read `Project/DECKCUT_PLAN.md` (§2.2–2.3). Implement
-> `deckcut/ingest/scryfall.py`: download the Scryfall bulk `oracle_cards` file (get the
+> **Prompt:** Read `EDHCut/EDHCut_PLAN.md` (§2.2–2.3). Implement
+> `edhcut/ingest/scryfall.py`: download the Scryfall bulk `oracle_cards` file (get the
 > download URI from `api.scryfall.com/bulk-data`; port the approach from
-> `Project/EDHDataAnalysis.ipynb` cell 2 but with plain requests, no scrython), then
+> `Analysis/EDHDataAnalysis.ipynb` cell 2 but with plain requests, no scrython), then
 > populate `cards` (fields per schema incl. `game_changer`; flatten prices/legalities like
 > the notebook; `can_be_commander` = legendary creature or "can be your commander" text)
 > and `card_names` with normalized aliases: full name, each `//` face name for multi-face
 > layouts, lowercased/punctuation-stripped variants. Filter to commander-legal paper
-> cards. Write an `ingest_log` row. Runnable as `python -m deckcut.ingest.scryfall`,
+> cards. Write an `ingest_log` row. Runnable as `python -m edhcut.ingest.scryfall`,
 > idempotent. Devlog entry per plan §4 (record: card counts before/after filtering, alias
 > counts, download size).
 
 ### Task 5.3 — Archidekt deck harvester
 Depends on: 5.2. **Do step A before step B.**
 
-> **Prompt (A — investigation):** Read `Project/DECKCUT_PLAN.md` §3, §5. Check
+> **Prompt (A — investigation):** Read `EDHCut/EDHCut_PLAN.md` §3, §5. Check
 > `https://archidekt.com/robots.txt` and their ToS page. Then probe (respectfully, ~1
 > req/s) the deck **search** endpoint their frontend uses
 > (`archidekt.com/api/decks/v3/?formats=3&...`): confirm how to filter by commander
@@ -276,8 +276,8 @@ Depends on: 5.2. **Do step A before step B.**
 > Document everything in `docs/archidekt_api.md`. Do NOT build the harvester yet. Devlog
 > entry (impediments section especially).
 
-> **Prompt (B — harvester):** Read `Project/DECKCUT_PLAN.md` §1, §3 and
-> `docs/archidekt_api.md`. Implement `deckcut/ingest/archidekt.py`: for each commander
+> **Prompt (B — harvester):** Read `EDHCut/EDHCut_PLAN.md` §1, §3 and
+> `docs/archidekt_api.md`. Implement `edhcut/ingest/archidekt.py`: for each commander
 > slot in config (handling the partner pair), search Commander-format decks (by views or
 > recency), fetch up to `config.decks_per_commander` (default 300; expect far fewer for
 > Orysa — record how many actually exist) deck details via pyrchidekt with our rate
@@ -294,7 +294,7 @@ Depends on: 5.2. **Do step A before step B.**
 ### Task 5.4 — EDHREC commander pages
 Depends on: 5.2. **Do step A before step B.**
 
-> **Prompt (A — investigation):** Read `Project/DECKCUT_PLAN.md` §3, §5. Check
+> **Prompt (A — investigation):** Read `EDHCut/EDHCut_PLAN.md` §3, §5. Check
 > `https://edhrec.com/robots.txt` and ToS. Install pyedhrec in a scratch venv and test
 > whether `get_commander_cards()` / `get_high_synergy_cards()` still work today for
 > "Krenko, Mob Boss" and for the partner pair (EDHREC has combined pages for partner
@@ -305,7 +305,7 @@ Depends on: 5.2. **Do step A before step B.**
 > parsing still matches. Devlog entry.
 
 > **Prompt (B — fetcher):** Read `docs/edhrec_api.md` and plan §2.3. Implement
-> `deckcut/ingest/edhrec.py` with our own session (do NOT depend on pyedhrec —
+> `edhcut/ingest/edhrec.py` with our own session (do NOT depend on pyedhrec —
 > reimplement build-ID discovery + the data routes inside our cached/rate-limited
 > session, copying pyedhrec's parsing logic where it proved current in step A). For each
 > commander slot (single and partner slugs), fetch card stats into `edhrec_card_stats`
@@ -318,8 +318,8 @@ Depends on: 5.2. **Do step A before step B.**
 ### Task 5.5 — Scryfall Tagger tags (official bulk)
 Depends on: 5.2.
 
-> **Prompt:** Read `Project/DECKCUT_PLAN.md` §3. Implement
-> `deckcut/ingest/tagger_bulk.py`: download the official `oracle_tags` bulk file (find it
+> **Prompt:** Read `EDHCut/EDHCut_PLAN.md` §3. Implement
+> `edhcut/ingest/tagger_bulk.py`: download the official `oracle_tags` bulk file (find it
 > by `type == "oracle_tags"` at `api.scryfall.com/bulk-data`; ~18 MB JSON; docs at
 > scryfall.com/docs/api/tags). Each tag object has a name, category, optional `child_ids`,
 > and a `taggings` array keyed by `oracle_id`. Insert into `card_tags` with
@@ -332,7 +332,7 @@ Depends on: 5.2.
 ### Task 5.6 — QA & coverage report 📊
 Depends on: 5.2–5.5.
 
-> **Prompt:** Implement `deckcut/ingest/qa_report.py` producing a markdown report:
+> **Prompt:** Implement `edhcut/ingest/qa_report.py` producing a markdown report:
 > per-slot deck counts and card-pool sizes; deck size sanity (flag ≠ 99/98 cards);
 > top-20 unresolved names per source with counts; tag coverage per source; EDHREC vs
 > Archidekt agreement spot-check (top-10 inclusion cards per slot side by side); Kyler
@@ -353,8 +353,8 @@ precon copies inflating co-occurrence — measured in 5.3/5.6, handled in 6.1).
 ### Task 6.1 — Co-occurrence & association scores
 Depends on: 5.3, 5.6 passing sanity checks.
 
-> **Prompt:** Read `Project/DECKCUT_PLAN.md` §2.4, §7. Implement
-> `deckcut/analysis/cooccurrence.py`: build a card index (cards in ≥3 decks), then sparse
+> **Prompt:** Read `EDHCut/EDHCut_PLAN.md` §2.4, §7. Implement
+> `edhcut/analysis/cooccurrence.py`: build a card index (cards in ≥3 decks), then sparse
 > co-occurrence count matrices — global and per-commander-slot — from `deck_cards`.
 > **Down-weight near-duplicate decks**: for slots with precon contamination (Kyler),
 > weight each deck by novelty (e.g. decks with precon_similarity > 0.9 collectively count
@@ -367,7 +367,7 @@ Depends on: 5.3, 5.6 passing sanity checks.
 ### Task 6.2 — Card embeddings + similarity index
 Depends on: 6.1.
 
-> **Prompt:** Implement `deckcut/analysis/embeddings.py`: gensim Word2Vec over
+> **Prompt:** Implement `edhcut/analysis/embeddings.py`: gensim Word2Vec over
 > decklists-as-sentences (deck = "sentence" of oracle_ids, shuffled a few times per epoch
 > since order is meaningless; large window; vector_size≈64, min_count=3). Save to
 > `embeddings.parquet`. Add complementary TF-IDF vectors over oracle_text + type_line
@@ -379,7 +379,7 @@ Depends on: 6.1.
 ### Task 6.3 — Synergy communities
 Depends on: 6.1.
 
-> **Prompt:** Implement `deckcut/analysis/communities.py`: weighted graph from the PMI
+> **Prompt:** Implement `edhcut/analysis/communities.py`: weighted graph from the PMI
 > matrix (edges above threshold), Leiden community detection (python-igraph + leidenalg)
 > globally and per-slot. Sweep the resolution parameter over a small grid; report
 > modularity + cluster count + size distribution per setting; fix the random seed and
@@ -392,7 +392,7 @@ Depends on: 6.1.
 ### Task 6.4 — Functional role classification
 Depends on: 5.5.
 
-> **Prompt:** Read `Project/DECKCUT_PLAN.md`. Implement `deckcut/analysis/roles.py`
+> **Prompt:** Read `EDHCut/EDHCut_PLAN.md`. Implement `edhcut/analysis/roles.py`
 > assigning each pool card one primary + optional secondary role from: `ramp, card_draw,
 > spot_removal, board_wipe, counterspell, tutor, recursion, graveyard_hate, protection,
 > evasion_enabler, wincon, stax_tax, land, synergy_piece, other`. Layered: (1) tagger_bulk
@@ -407,8 +407,8 @@ Depends on: 5.5.
 ### Task 6.5 — Oracle-text mining: power level, extra tags, synergy detection *(new in v2)*
 Depends on: 5.2, 6.4.
 
-> **Prompt:** Read `Project/DECKCUT_PLAN.md` §2.4. Implement
-> `deckcut/analysis/textmine.py`, our own oracle-text analysis layer with three outputs:
+> **Prompt:** Read `EDHCut/EDHCut_PLAN.md` §2.4. Implement
+> `edhcut/analysis/textmine.py`, our own oracle-text analysis layer with three outputs:
 > **(1) Mechanic features** (`text_features.parquet`): parse oracle_text into structured
 > produce/consume features — produces: tokens, treasures, counters (+1/+1, charge...),
 > card draw, mana, creatures-entering triggers, death triggers, discard, mill, lifegain;
@@ -433,7 +433,7 @@ Depends on: 5.2, 6.4.
 ### Task 6.6 — Archetype definitions & role quotas
 Depends on: 6.1, 6.4, 6.5 (+5.4 for themes).
 
-> **Prompt:** Implement `deckcut/analysis/archetypes.py`. Per commander slot: represent
+> **Prompt:** Implement `edhcut/analysis/archetypes.py`. Per commander slot: represent
 > each deck as a feature vector (role counts + mean deck embedding + mechanic-feature
 > counts from text_features), k-means (k via silhouette over 2–6) into sub-archetypes,
 > label each by most-distinctive high-inclusion cards + closest EDHREC theme where
@@ -447,9 +447,9 @@ Depends on: 6.1, 6.4, 6.5 (+5.4 for themes).
 ### Task 6.7 — KB build pipeline + loader
 Depends on: 6.1–6.6.
 
-> **Prompt:** Implement `deckcut/analysis/build_kb.py` — one command running 6.1–6.6 in
+> **Prompt:** Implement `edhcut/analysis/build_kb.py` — one command running 6.1–6.6 in
 > order, writing versioned `data/kb/<YYYYMMDD-n>/` with `manifest.json` (build date, deck
-> counts, config, per-step timings). Then `deckcut/kb.py`: a `KnowledgeBase` class
+> counts, config, per-step timings). Then `edhcut/kb.py`: a `KnowledgeBase` class
 > loading a KB dir lazily, exposing: `similar_cards(oracle_id, space, k)`,
 > `pmi(a, b, slot=None)`, `cluster_of(oracle_id, slot=None)`, `roles(oracle_id)`,
 > `text_features(oracle_id)`, `power(oracle_id)`, `synergy_partners(oracle_id)`,
@@ -467,7 +467,7 @@ politely with the supported list (v1 behavior).
 ### Task 7.1 — Decklist parser
 Depends on: 5.2.
 
-> **Prompt:** Implement `deckcut/recommend/parser.py`: raw decklist string →
+> **Prompt:** Implement `edhcut/recommend/parser.py`: raw decklist string →
 > `{commanders: list[oracle_id] (1 or 2), cards: list[oracle_id], errors, warnings}`.
 > Formats: plain "1 Card Name"/"1x"/bare names; Archidekt/Moxfield text exports (category
 > headers, `*CMDR*`/"Commander:" markers); MTGO. **Partner pairs must parse** (two
@@ -480,7 +480,7 @@ Depends on: 5.2.
 ### Task 7.2 — Deck stats & archetype classification
 Depends on: 6.7, 7.1.
 
-> **Prompt:** Implement `deckcut/recommend/deck_stats.py` and `archetype_classify.py`
+> **Prompt:** Implement `edhcut/recommend/deck_stats.py` and `archetype_classify.py`
 > using only the `KnowledgeBase` interface. Stats: mana curve, color pips vs mana
 > sources, role counts vs archetype quotas (surplus/deficit), mean power score +
 > power-level histogram (from 6.5), average price, least-played inclusions. Classification:
@@ -493,8 +493,8 @@ Depends on: 6.7, 7.1.
 ### Task 7.3 — Cut recommender (the core feature)
 Depends on: 7.2.
 
-> **Prompt:** Read `Project/DECKCUT_PLAN.md` §8. Implement
-> `deckcut/recommend/cutter.py`: given parsed deck + candidate card, score every
+> **Prompt:** Read `EDHCut/EDHCut_PLAN.md` §8. Implement
+> `edhcut/recommend/cutter.py`: given parsed deck + candidate card, score every
 > non-land existing card as a cut. Weighted components (weights in config):
 > (a) **redundancy** — embedding similarity + shared role/mechanic-features with the
 > candidate; (b) **low deck synergy** — mean PMI to the rest of the deck
@@ -511,7 +511,7 @@ Depends on: 7.2.
 ### Task 7.4 — Swap & addition suggester
 Depends on: 7.3.
 
-> **Prompt:** Implement `deckcut/recommend/suggester.py`: (1) **upgrade swaps** — for
+> **Prompt:** Implement `edhcut/recommend/suggester.py`: (1) **upgrade swaps** — for
 > low-synergy deck cards, find in-color-identity commander-legal replacements with the
 > same role, higher PMI-to-deck + synergy_links + EDHREC synergy, optional per-card
 > budget cap, and a power-band option (suggest within ±2 power of the deck's mean —
@@ -524,7 +524,7 @@ Depends on: 7.3.
 ### Task 7.5 — Evaluation harness 📊
 Depends on: 7.3, 7.4.
 
-> **Prompt:** Implement `deckcut/recommend/evaluate.py` (add a `holdout` flag in build_kb
+> **Prompt:** Implement `edhcut/recommend/evaluate.py` (add a `holdout` flag in build_kb
 > config first, hold out 20% of decks, rebuild KB). Metrics: (1) **leave-one-out
 > recovery** — remove a random card from a held-out deck, report rank/hit@k of it among
 > the suggester's additions; (2) **intruder detection** — inject an off-archetype card
@@ -540,11 +540,11 @@ Depends on: 7.3, 7.4.
 ### Task 7.6 — API layer + CLI
 Depends on: 7.2–7.4.
 
-> **Prompt:** Implement `deckcut/api/` with FastAPI: `POST /api/analyze`, `POST /api/cut`,
+> **Prompt:** Implement `edhcut/api/` with FastAPI: `POST /api/analyze`, `POST /api/cut`,
 > `POST /api/suggest`, `GET /api/commanders` (supported slots incl. the partner pair),
 > `GET /api/cards/search?q=` (autocomplete from card_names). Pydantic schemas, KB loaded
 > once at startup, unsupported commander → clean 4xx listing supported slots. Thin CLI
-> (`python -m deckcut analyze deck.txt`, `... cut deck.txt "Card Name"`). Integration
+> (`python -m edhcut analyze deck.txt`, `... cut deck.txt "Card Name"`). Integration
 > tests using the fixture decks. Devlog entry.
 
 ---
@@ -557,7 +557,7 @@ scope grows.
 ### Task 8.1 — Frontend
 Depends on: 7.6.
 
-> **Prompt:** Create `Project/deckcut/frontend/` — React 18 + Vite + TypeScript against
+> **Prompt:** Create `EDHCut/frontend/` — React 18 + Vite + TypeScript against
 > the FastAPI OpenAPI contract (proxy to localhost:8000 in vite config). Pages: (1) deck
 > input — textarea paste + commander autocomplete (`/api/cards/search`), parse warnings
 > inline, partner-pair aware; (2) analysis — mana curve + role-vs-quota charts
@@ -571,9 +571,9 @@ Depends on: 7.6.
 ### Task 8.2 — Containerize
 Depends on: 8.1.
 
-> **Prompt:** Multi-stage Dockerfile in `Project/deckcut/`: stage 1 builds the Vite
+> **Prompt:** Multi-stage Dockerfile in `EDHCut/`: stage 1 builds the Vite
 > frontend; stage 2 slim Python image installing the package, serving the SPA via
-> FastAPI StaticFiles, bundling `data/deckcut.db` + latest `data/kb/<version>/`.
+> FastAPI StaticFiles, bundling `data/edhcut.db` + latest `data/kb/<version>/`.
 > `/api/health` reports KB version. Document local build/run in README. Image < ~1 GB.
 > Devlog entry.
 
@@ -618,7 +618,7 @@ decks? smoothing?) before building anything on top.
 
 **Spike prompt to feed Sonnet:**
 
-> Read `Project/DECKCUT_PLAN.md` §10 and implement the vertical slice exactly as ordered
+> Read `EDHCut/EDHCut_PLAN.md` §10 and implement the vertical slice exactly as ordered
 > there, stopping after each numbered step to show me results. Steps 1–3 follow tasks
 > 5.1, 5.2, 5.3 in the plan (single commander: Krenko, Mob Boss; 300 decks). Step 4:
 > global co-occurrence counts + smoothed PMI for that corpus only, saved as npz. Step 5:
@@ -688,7 +688,7 @@ wants to re-examine the source example itself, it needs to be re-supplied on wha
 device that session runs on.
 
 **Environment note (this device only, not portable via git):** the existing
-`Project/EDHDataAnalysis.ipynb` notebook (pre-DeckCut Scryfall exploration) was run
+`Analysis/EDHDataAnalysis.ipynb` notebook (pre-EDHCut Scryfall exploration) was run
 against a local Jupyter server at `http://localhost:8888` with token `JupTokEDHCut`,
 configured in a local `.mcp.json`. That server isn't part of the repo and needs to be
 started fresh on any other device before that notebook can be driven interactively again.
