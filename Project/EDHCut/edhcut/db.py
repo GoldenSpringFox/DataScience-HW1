@@ -114,7 +114,29 @@ CREATE TABLE IF NOT EXISTS edhrec_card_stats (
     PRIMARY KEY (commander_key, oracle_id)
 );
 
+-- EDHREC's site-wide tag popularity ranking — one row per tag that exists anywhere on EDHREC,
+-- with its global deck count, independent of any one commander. Used as the fixed
+-- theme/typal vocabulary for the clustering/labeling step (task 6.6), not derived from our
+-- own harvested corpus. Not to be confused with `edhrec_themes_per_commander`, which is
+-- scoped to a single commander slot. EDHREC splits its own tag browser into two kinds of tag
+-- (`edhrec.com/tags/themes` — mechanical/archetype tags like "Aristocrats"; `/tags/typal` —
+-- tribal/creature-type tags like "Goblins") — both land here, distinguished by `kind`.
+-- Composite `(kind, theme)` primary key rather than `theme` alone: confirmed empirically (5.4-C
+-- vs 5.4-D) that the two lists don't currently collide on a name, but nothing guarantees that
+-- stays true as EDHREC adds tags, so don't rely on cross-kind uniqueness.
 CREATE TABLE IF NOT EXISTS edhrec_themes (
+    theme TEXT NOT NULL,
+    kind TEXT NOT NULL,      -- 'theme' | 'typal'
+    slug TEXT NOT NULL,      -- from the tag's own "/tags/<slug>" url, stable across renames
+    num_decks INTEGER,       -- global popularity: decks site-wide tagged with this theme
+    fetched_at TEXT,
+    PRIMARY KEY (kind, theme)
+);
+
+-- Per-commander-slot theme tag counts (task 5.4-B) — how many decks *for this specific
+-- commander* carry each tag, from that commander's own EDHREC page. `num_decks` here is
+-- local to the slot, not comparable across different commanders' corpora sizes.
+CREATE TABLE IF NOT EXISTS edhrec_themes_per_commander (
     commander_key TEXT NOT NULL,
     theme TEXT NOT NULL,
     num_decks INTEGER,
@@ -140,6 +162,7 @@ TABLE_NAMES: tuple[str, ...] = (
     "card_tags",
     "edhrec_card_stats",
     "edhrec_themes",
+    "edhrec_themes_per_commander",
     "ingest_log",
 )
 
@@ -161,8 +184,33 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
 
+def _migrate_legacy_edhrec_themes_table(conn: sqlite3.Connection) -> None:
+    """One-time fixups for `edhrec_themes` across its two schema changes. Must run *before*
+    `SCHEMA` is executed, so the fresh `CREATE TABLE IF NOT EXISTS edhrec_themes` isn't a
+    no-op against an old shape.
+
+    1. (task 5.4-C) DBs created before `edhrec_themes` was repurposed for the global theme
+       popularity ranking (it used to be the per-commander-slot table, now called
+       `edhrec_themes_per_commander`) — detected by the old table's `commander_key` column,
+       which the global-themes schema doesn't have. Renamed rather than dropped, so the
+       already-harvested per-commander rows aren't lost.
+    2. (task 5.4-D) DBs created with 5.4-C's schema (`theme` alone as primary key) before
+       `kind` ('theme' vs. 'typal') was added — detected by the missing `kind` column.
+       SQLite can't ALTER a primary key in place, and unlike per-commander data this table is
+       wholly derived/re-fetchable (a handful of cached page fetches, not hours of harvesting)
+       — so this one's just dropped and left for the fresh `CREATE TABLE` to rebuild correctly
+       on next `python -m edhcut.ingest.edhrec` run, rather than hand-writing a copy-migration
+       for disposable data."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(edhrec_themes)")}
+    if "commander_key" in columns:
+        conn.execute("ALTER TABLE edhrec_themes RENAME TO edhrec_themes_per_commander")
+    elif columns and "kind" not in columns:
+        conn.execute("DROP TABLE edhrec_themes")
+
+
 def create_schema(conn: sqlite3.Connection) -> None:
     """Idempotent: safe to call against an existing DB."""
+    _migrate_legacy_edhrec_themes_table(conn)
     conn.executescript(SCHEMA)
     _add_missing_columns(conn)
     conn.commit()

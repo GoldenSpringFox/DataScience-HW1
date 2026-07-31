@@ -85,8 +85,14 @@ edhrec_card_stats(
   num_decks INTEGER, category TEXT,
   PRIMARY KEY(commander_key, oracle_id)
 )
-edhrec_themes(commander_key TEXT, theme TEXT, num_decks INTEGER,
-  PRIMARY KEY(commander_key, theme))
+edhrec_themes(                                          -- GLOBAL tag popularity ranking: BOTH
+  theme TEXT, kind TEXT, slug TEXT, num_decks INTEGER,    -- /tags/themes ('theme') AND
+  fetched_at TEXT, PRIMARY KEY(kind, theme)               -- /tags/typal ('typal') — the fixed
+)                                                          -- vocabulary for task 6.6's clustering
+edhrec_themes_per_commander(                            -- per-slot tag counts, NOT comparable
+  commander_key TEXT, theme TEXT, num_decks INTEGER,      -- across slots (corpus-size-dependent)
+  PRIMARY KEY(commander_key, theme)
+)
 ingest_log(source TEXT, run_at TEXT, items INTEGER, unresolved INTEGER, notes TEXT)
 ```
 
@@ -339,7 +345,9 @@ Depends on: 5.2. **Do step A before step B.**
 ### Task 5.4 — EDHREC commander pages
 Depends on: 5.2. **Do step A before step B.**
 
-> **Prompt (A — investigation):** Read `EDHCut/EDHCut_PLAN.md` §3, §5. Check
+> **Prompt (A — investigation):** ✅ Done 2026-07-31 — findings in `docs/edhrec_api.md`
+>
+> Read `EDHCut/EDHCut_PLAN.md` §3, §5. Check
 > `https://edhrec.com/robots.txt` and ToS. Install pyedhrec in a scratch venv and test
 > whether `get_commander_cards()` / `get_high_synergy_cards()` still work today for
 > "Krenko, Mob Boss" and for the partner pair (EDHREC has combined pages for partner
@@ -349,7 +357,22 @@ Depends on: 5.2. **Do step A before step B.**
 > routes for commander card stats and themes, response shape, and whether pyedhrec's
 > parsing still matches. Devlog entry.
 
-> **Prompt (B — fetcher):** Read `docs/edhrec_api.md` and plan §2.3. Implement
+> **Prompt (B — fetcher):** ✅ Done 2026-07-31 — findings in `docs/devlog/5.4b-edhrec-fetcher.md`,
+> `docs/devlog/5.4c-global-themes.md` (covers both the themes and typal global tables).
+> Summary: all 5
+> slots harvested — 1,177 `edhrec_card_stats` rows, 285 per-commander theme rows, 0 errors.
+> Beyond what this prompt originally specified: per user feedback that per-commander tag
+> counts alone aren't a usable input for task 6.6's clustering (not comparable across
+> differently-sized commander corpora), also harvests EDHREC's *global*, site-wide tag
+> popularity ranking — both of EDHREC's own tag categories, `edhrec.com/tags/themes` (270
+> mechanical/archetype tags) **and** `edhrec.com/tags/typal` (131 tribal/creature-type tags,
+> added on further user feedback right after the themes-only pass) — into one `edhrec_themes`
+> table, keyed `(kind, theme)` and distinguished by a `kind` column. The per-commander table
+> this prompt describes below was renamed to `edhrec_themes_per_commander` to free up the
+> `edhrec_themes` name, via a data-preserving migration (`db._migrate_legacy_edhrec_themes_table`)
+> that ran twice across the two schema changes without losing any already-harvested rows.
+>
+> Read `docs/edhrec_api.md` and plan §2.3. Implement
 > `edhcut/ingest/edhrec.py` with our own session (do NOT depend on pyedhrec —
 > reimplement build-ID discovery + the data routes inside our cached/rate-limited
 > session, copying pyedhrec's parsing logic where it proved current in step A). For each
