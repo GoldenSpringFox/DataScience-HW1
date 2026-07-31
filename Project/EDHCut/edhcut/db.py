@@ -104,6 +104,18 @@ CREATE TABLE IF NOT EXISTS card_tags (
     PRIMARY KEY (oracle_id, tag, source)
 );
 
+-- Scryfall Tagger tag aliases (e.g. "boardwipe" -> "sweeper", matching what Scryfall's own
+-- `otag:` search resolves) -- kept separate from `card_tags` rather than inserted as
+-- duplicate rows there, so co-occurrence/clustering (task 6.x) doesn't double-count the same
+-- real tag under two different strings. `alias_normalized` uses the same normalization as
+-- `card_names` (`scryfall.normalize_name`). No collisions found live between aliases or
+-- against real tag slugs (checked directly against the bulk file), so a bare-alias primary
+-- key is safe -- if that ever stops holding, this needs revisiting.
+CREATE TABLE IF NOT EXISTS tag_aliases (
+    alias_normalized TEXT PRIMARY KEY,
+    tag TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS edhrec_card_stats (
     commander_key TEXT NOT NULL,  -- single oracle_id, or "id1+id2" for partners
     oracle_id TEXT NOT NULL,
@@ -160,6 +172,7 @@ TABLE_NAMES: tuple[str, ...] = (
     "precons",
     "precon_cards",
     "card_tags",
+    "tag_aliases",
     "edhrec_card_stats",
     "edhrec_themes",
     "edhrec_themes_per_commander",

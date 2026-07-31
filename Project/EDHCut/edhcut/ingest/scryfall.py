@@ -54,30 +54,32 @@ def normalize_name(name: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def get_bulk_data_info(session: RateLimitedSession) -> dict[str, Any]:
+def get_bulk_data_info(session: RateLimitedSession, bulk_type: str = BULK_DATA_TYPE) -> dict[str, Any]:
     response = session.get(BULK_DATA_INDEX_URL)
     response.raise_for_status()
     for entry in response.json()["data"]:
-        if entry["type"] == BULK_DATA_TYPE:
+        if entry["type"] == bulk_type:
             return entry
-    raise RuntimeError(f"No bulk-data entry of type {BULK_DATA_TYPE!r} found")
+    raise RuntimeError(f"No bulk-data entry of type {bulk_type!r} found")
 
 
-def download_bulk_file(session: RateLimitedSession, download_uri: str, dest: Path) -> int:
+def download_bulk_file(
+    session: RateLimitedSession, download_uri: str, dest: Path, *, desc: str = "Downloading bulk file"
+) -> int:
     """Stream the gzip-compressed JSONL bulk file to `dest`. Returns bytes written."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     with session.get(download_uri, stream=True) as response:
         response.raise_for_status()
         total = int(response.headers.get("content-length", 0))
-        with open(dest, "wb") as f, tqdm(total=total, unit="B", unit_scale=True, desc="Downloading oracle_cards") as bar:
+        with open(dest, "wb") as f, tqdm(total=total, unit="B", unit_scale=True, desc=desc) as bar:
             for chunk in response.iter_content(chunk_size=1024 * 256):
                 f.write(chunk)
                 bar.update(len(chunk))
     return dest.stat().st_size
 
 
-def iter_bulk_cards(path: Path):
-    """Yield one card dict per line from a gzip-compressed JSONL bulk file."""
+def iter_bulk_lines(path: Path):
+    """Yield one JSON object per line from a gzip-compressed JSONL bulk file (cards, tags, ...)."""
     with gzip.open(path, "rt", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -223,14 +225,14 @@ def run(conn: sqlite3.Connection, session: RateLimitedSession | None = None) -> 
 
     bulk_info = get_bulk_data_info(session)
     dest = CONFIG.paths.raw_dir / "oracle_cards.jsonl.gz"
-    download_bytes = download_bulk_file(session, bulk_info["jsonl_download_uri"], dest)
+    download_bytes = download_bulk_file(session, bulk_info["jsonl_download_uri"], dest, desc="Downloading oracle_cards")
 
     total_cards = 0
     skipped_no_oracle_id = 0
     card_rows: list[dict[str, Any]] = []
     name_to_oracle_id: dict[str, str] = {}
 
-    for card in iter_bulk_cards(dest):
+    for card in iter_bulk_lines(dest):
         total_cards += 1
 
         oracle_id = card.get("oracle_id")

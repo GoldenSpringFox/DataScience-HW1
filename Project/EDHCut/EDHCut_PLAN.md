@@ -79,6 +79,7 @@ decks(
 deck_cards(deck_id INTEGER, oracle_id TEXT, qty INTEGER, PRIMARY KEY(deck_id, oracle_id))
 card_tags(oracle_id TEXT, tag TEXT, source TEXT, PRIMARY KEY(oracle_id, tag, source))
   -- source ∈ {'tagger_bulk', 'textmine', 'manual'}
+tag_aliases(alias_normalized TEXT PRIMARY KEY, tag TEXT)  -- e.g. "boardwipe" -> "sweeper"
 edhrec_card_stats(
   commander_key TEXT,                                    -- single oracle_id or "id1+id2" for partners
   oracle_id TEXT, inclusion_rate REAL, synergy_score REAL,
@@ -386,7 +387,20 @@ Depends on: 5.2. **Do step A before step B.**
 ### Task 5.5 — Scryfall Tagger tags (official bulk)
 Depends on: 5.2.
 
-> **Prompt:** Read `EDHCut/EDHCut_PLAN.md` §3. Implement
+> **Prompt:** ✅ Done 2026-07-31 — findings in `docs/devlog/5.5-tagger-bulk.md`. Summary:
+> 376,800 `card_tags` rows, 4,505 tags / 230,624 taggings from the live 5.6 MB bulk file
+> (smaller than this prompt's 18 MB estimate), 31,423/31,622 cards (99.4%) tagged. Two
+> corrections to this prompt's field-name assumptions found by checking the live shape: tag
+> objects use `label`/`slug`, not `name`; there's no `category` field (every object in this
+> bulk file is already `type == "oracle"`, so the functional-tags-only filter is automatic).
+> Ancestor tags use each tag's own `parent_ids` directly, no `child_ids` inversion needed.
+> **Found via user manual spot-check after the initial build**: Scryfall's own `otag:` search
+> resolves tag *aliases* (e.g. "boardwipe" → canonical tag "sweeper") — the original ingest
+> never read the `aliases` field, so alias lookups silently didn't work. Added `tag_aliases`
+> (813 rows, kept separate from `card_tags` so an alias isn't double-counted as a distinct tag
+> downstream — user's explicit call).
+>
+> Read `EDHCut/EDHCut_PLAN.md` §3. Implement
 > `edhcut/ingest/tagger_bulk.py`: download the official `oracle_tags` bulk file (find it
 > by `type == "oracle_tags"` at `api.scryfall.com/bulk-data`; ~18 MB JSON; docs at
 > scryfall.com/docs/api/tags). Each tag object has a name, category, optional `child_ids`,
