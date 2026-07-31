@@ -414,7 +414,18 @@ Depends on: 5.2.
 ### Task 5.6 — QA & coverage report 📊
 Depends on: 5.2–5.5.
 
-> **Prompt:** Implement `edhcut/ingest/qa_report.py` producing a markdown report:
+> **Prompt:** ✅ Done 2026-07-31 — findings in `docs/devlog/5.6-qa-report.md`. Summary: 1,230
+> decks, 0 genuine deck-size violations (2 explained edge cases with >2 Archidekt
+> `"Commander"`-tagged cards), 376,800 `card_tags` rows, all 4 fixture decklists resolve.
+> EDHREC-vs-Archidekt top-10 overlap ranges 2/10 (Yoshimaru+Bruse Tarl, expected given 5.3-B's
+> partner-fallback corpus) to 10/10 (Krenko). Along the way, fixed two real bugs the naive
+> version of this check itself introduced: a false-positive deck-size mismatch (23 decks,
+> from not reconciling against each deck's own unresolved/banned-card count) and a
+> comma-in-card-name parsing bug that fragmented names like "Orcrist, Goblin-cleaver" into
+> fake half-entries. `notebooks/01_data_overview.ipynb` reuses the same query functions,
+> executed end-to-end with real plotly output, 0 errors.
+>
+> Implement `edhcut/ingest/qa_report.py` producing a markdown report:
 > per-slot deck counts and card-pool sizes; deck size sanity (flag ≠ 99/98 cards);
 > top-20 unresolved names per source with counts; tag coverage per source; EDHREC vs
 > Archidekt agreement spot-check (top-10 inclusion cards per slot side by side); Kyler
