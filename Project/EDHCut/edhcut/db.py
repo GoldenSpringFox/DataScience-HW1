@@ -97,6 +97,40 @@ CREATE TABLE IF NOT EXISTS precon_cards (
     PRIMARY KEY (precon_id, oracle_id)
 );
 
+-- Per-card "did real deckbuilders keep this, or cut it?" evidence, scoped per precon AND per
+-- the commander context evaluating it (`commander_key`, same bare-oracle_id/"id1+id2"
+-- convention as `edhrec_card_stats`) — the same precon's card list can be evaluated
+-- differently depending on which commander a deck actually runs (a card can be great to keep
+-- under one commander and dead weight under another, e.g. a precon's own declared commander
+-- showing up as a mere alternative in someone else's build). Long/tall format so adding more
+-- commanders never means adding columns: `similar_deck_count` is how many decks running this
+-- commander_key were judged close enough to this precon (see edhcut.ingest.precon_retention's
+-- qty-aware card-difference threshold) to count as evidence at all; `kept_count` is how many
+-- of those still ran this specific card. Deliberately stores raw counts, not a %cut column —
+-- a precon/commander pairing with only a handful of similar decks shouldn't produce a
+-- confident-looking percentage (same reasoning as precon_similarity.jaccard_similarity
+-- returning None rather than 0.0 on no data).
+-- `weighted_cut`/`weighted_kept` are a more nuanced companion signal, summed across *every*
+-- deck matching this (precon, commander_key) pair regardless of `similar_deck_count`'s hard
+-- threshold: each deck contributes a confidence weight derived from how many cards it changed
+-- overall (edhcut.ingest.precon_retention.cut_confidence) -- a deck that barely touched the
+-- precon gives strong "cut" evidence for the few cards it did remove and near-zero "kept"
+-- evidence for the untouched rest (nothing to conclude from cards nobody bothered to look
+-- at); a heavily rebuilt deck gives the opposite -- weak "cut" evidence per swap (everything
+-- was in flux) but strong "kept" evidence for whatever specific cards survived a near-total
+-- rebuild. Floats, not bounded to [0,1] -- they're sums of per-deck weights across however
+-- many decks contributed.
+CREATE TABLE IF NOT EXISTS precon_card_retention (
+    precon_id INTEGER NOT NULL REFERENCES precons(precon_id),
+    commander_key TEXT NOT NULL,
+    oracle_id TEXT NOT NULL REFERENCES cards(oracle_id),
+    similar_deck_count INTEGER NOT NULL,
+    kept_count INTEGER NOT NULL,
+    weighted_cut REAL NOT NULL DEFAULT 0,
+    weighted_kept REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (precon_id, commander_key, oracle_id)
+);
+
 CREATE TABLE IF NOT EXISTS card_tags (
     oracle_id TEXT NOT NULL REFERENCES cards(oracle_id),
     tag TEXT NOT NULL,
@@ -171,6 +205,7 @@ TABLE_NAMES: tuple[str, ...] = (
     "deck_cards",
     "precons",
     "precon_cards",
+    "precon_card_retention",
     "card_tags",
     "tag_aliases",
     "edhrec_card_stats",
@@ -186,6 +221,10 @@ TABLE_NAMES: tuple[str, ...] = (
 # statements above (a fresh database gets them from there and skips the ALTER).
 ADDED_COLUMNS: dict[str, dict[str, str]] = {
     "decks": {"slot_key": "TEXT"},
+    "precon_card_retention": {
+        "weighted_cut": "REAL NOT NULL DEFAULT 0",
+        "weighted_kept": "REAL NOT NULL DEFAULT 0",
+    },
 }
 
 
