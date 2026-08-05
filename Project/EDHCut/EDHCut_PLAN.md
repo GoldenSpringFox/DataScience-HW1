@@ -446,7 +446,26 @@ precon copies inflating co-occurrence — measured in 5.3/5.6, handled in 6.1).
 ### Task 6.1 — Co-occurrence & association scores
 Depends on: 5.3, 5.6 passing sanity checks.
 
-> **Prompt:** Read `EDHCut/EDHCut_PLAN.md` §2.4, §7. Implement
+> ✅ Done 2026-08-02 — findings in `docs/devlog/6.1-cooccurrence.md`. Summary:
+> `edhcut/analysis/cooccurrence.py`, 20 new tests (144 total in the package). Card pool:
+> 3,095 cards (>= 3 decks) out of 31,622 total. Built global + all 5 per-slot co-occurrence/
+> PMI/lift matrices under `data/kb/dev/` (`card_index.parquet` + `.npz` per scope). Precon
+> down-weighting used a continuous per-deck novelty weight (full weight up to
+> precon_similarity 0.9, linear decay to a 0.1 floor at 1.0) rather than explicit
+> near-duplicate grouping — checked live that only 1/1,230 harvested decks actually exceeds
+> the 0.9 threshold, so the scheme is real but not load-bearing at today's corpus size.
+> **The literal smoothed-PMI formula alone produced useless top-lists** — a rare card that
+> happens to co-occur with the query in 100% of its own (small) appearance count ties at a
+> constant "ceiling" PMI value regardless of how coincidental that is, so dozens of unrelated
+> low-count coincidences drowned out real associations (e.g. Purphoros, God of the Forge's
+> raw top-10 was ten unrelated cards tied at the same score). Fixed with a standard Pantel/Lin
+> low-count discounting factor applied to PMI (not lift, kept as a plain undiscounted ratio).
+> After the fix, `Cultivate`'s #1 global association is `Kodama's Reach` — the exact example
+> task 6.2 names as its own success criterion, found here already from co-occurrence alone —
+> and Krenko-slot `Skirk Prospector` surfaces a recognizable sac-outlet package
+> (Ashnod's Altar, Umbral Mantle, Goblin Sledder, Aggravated Assault).
+>
+> Read `EDHCut/EDHCut_PLAN.md` §2.4, §7. Implement
 > `edhcut/analysis/cooccurrence.py`: build a card index (cards in ≥3 decks), then sparse
 > co-occurrence count matrices — global and per-commander-slot — from `deck_cards`.
 > **Down-weight near-duplicate decks**: for slots with precon contamination (Kyler),

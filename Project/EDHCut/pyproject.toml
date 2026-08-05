@@ -11,6 +11,8 @@ dependencies = [
     "pyarrow>=16.0",
     "tqdm>=4.66",
     "mtg-parser>=0.0.1a55",
+    "numpy>=1.26",
+    "scipy>=1.11",
 ]
 
 [project.optional-dependencies]
