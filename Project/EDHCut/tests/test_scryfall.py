@@ -1,4 +1,5 @@
 from edhcut.ingest.scryfall import (
+    _image_uri,
     build_card_row,
     can_be_commander,
     is_commander_legal,
@@ -23,6 +24,7 @@ SOL_RING = {
     "layout": "normal",
     "produced_mana": ["C"],
     "games": ["paper", "mtgo"],
+    "image_uris": {"normal": "https://cards.scryfall.io/normal/front/a/b/sol-ring.jpg"},
 }
 
 TRANSFORM_CARD = {
@@ -43,12 +45,14 @@ TRANSFORM_CARD = {
             "mana_cost": "{2}",
             "oracle_text": "At the beginning of your upkeep...",
             "colors": [],
+            "image_uris": {"normal": "https://cards.scryfall.io/normal/front/d/e/captive.jpg"},
         },
         {
             "name": "Ulvenwald Abomination",
             "mana_cost": "",
             "oracle_text": "Trample",
             "colors": ["G"],
+            "image_uris": {"normal": "https://cards.scryfall.io/normal/back/d/e/abomination.jpg"},
         },
     ],
 }
@@ -71,6 +75,7 @@ def test_build_card_row_single_face() -> None:
     assert row["price_usd"] == 2.5
     assert row["is_land"] is False
     assert row["can_be_commander"] is False
+    assert row["image_uri"] == "https://cards.scryfall.io/normal/front/a/b/sol-ring.jpg"
 
 
 def test_build_card_row_falls_back_to_face_text_for_multi_face_cards() -> None:
@@ -78,6 +83,25 @@ def test_build_card_row_falls_back_to_face_text_for_multi_face_cards() -> None:
     assert row["mana_cost"] == "{2}"
     assert "Trample" in row["oracle_text"]
     assert row["colors"] == "[\"G\"]"
+    assert row["image_uri"] == "https://cards.scryfall.io/normal/front/d/e/captive.jpg"
+
+
+def test_image_uri_prefers_top_level() -> None:
+    assert _image_uri(SOL_RING) == "https://cards.scryfall.io/normal/front/a/b/sol-ring.jpg"
+
+
+def test_image_uri_falls_back_to_front_face_for_multi_face_cards() -> None:
+    # Front face specifically, not the back -- one representative image per card.
+    assert _image_uri(TRANSFORM_CARD) == "https://cards.scryfall.io/normal/front/d/e/captive.jpg"
+
+
+def test_image_uri_respects_requested_size() -> None:
+    card = {"image_uris": {"normal": "normal.jpg", "large": "large.jpg"}}
+    assert _image_uri(card, size="large") == "large.jpg"
+
+
+def test_image_uri_none_when_missing_entirely() -> None:
+    assert _image_uri({"name": "No Image Card"}) is None
 
 
 def test_can_be_commander_legendary_creature() -> None:

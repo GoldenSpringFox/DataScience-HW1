@@ -119,6 +119,20 @@ def _colors(card: dict) -> list[str]:
     return sorted(colors, key=lambda c: _WUBRG_ORDER.get(c, 99))
 
 
+def _image_uri(card: dict, *, size: str = "normal") -> str | None:
+    """Prefer the card's own top-level `image_uris` (single-faced cards, and split/adventure
+    cards which show both halves in one image); fall back to the *front* face's `image_uris`
+    for transform/modal-DFC/meld cards, which carry image_uris per-face instead. One
+    representative image per oracle_id — good enough for eyeballing/display, not a full
+    multi-face gallery."""
+    image_uris = card.get("image_uris")
+    if not image_uris:
+        faces = card.get("card_faces") or []
+        if faces:
+            image_uris = faces[0].get("image_uris")
+    return (image_uris or {}).get(size)
+
+
 def is_commander_legal(card: dict) -> bool:
     return (card.get("legalities") or {}).get("commander") == "legal"
 
@@ -155,6 +169,7 @@ def build_card_row(card: dict) -> dict[str, Any]:
         "layout": card.get("layout"),
         "produced_mana": json.dumps(card.get("produced_mana") or []),
         "is_land": "Land" in type_line,
+        "image_uri": _image_uri(card),
     }
 
 
@@ -164,11 +179,11 @@ def _write_cards(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> None:
         INSERT INTO cards (
             oracle_id, name, mana_cost, cmc, type_line, oracle_text, colors,
             color_identity, keywords, rarity, edhrec_rank, price_usd, game_changer,
-            legal_commander, can_be_commander, layout, produced_mana, is_land
+            legal_commander, can_be_commander, layout, produced_mana, is_land, image_uri
         ) VALUES (
             :oracle_id, :name, :mana_cost, :cmc, :type_line, :oracle_text, :colors,
             :color_identity, :keywords, :rarity, :edhrec_rank, :price_usd, :game_changer,
-            :legal_commander, :can_be_commander, :layout, :produced_mana, :is_land
+            :legal_commander, :can_be_commander, :layout, :produced_mana, :is_land, :image_uri
         )
         ON CONFLICT(oracle_id) DO UPDATE SET
             name=excluded.name, mana_cost=excluded.mana_cost, cmc=excluded.cmc,
@@ -178,7 +193,8 @@ def _write_cards(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> None:
             edhrec_rank=excluded.edhrec_rank, price_usd=excluded.price_usd,
             game_changer=excluded.game_changer, legal_commander=excluded.legal_commander,
             can_be_commander=excluded.can_be_commander, layout=excluded.layout,
-            produced_mana=excluded.produced_mana, is_land=excluded.is_land
+            produced_mana=excluded.produced_mana, is_land=excluded.is_land,
+            image_uri=excluded.image_uri
         """,
         rows,
     )

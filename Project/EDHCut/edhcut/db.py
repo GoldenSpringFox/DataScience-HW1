@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS cards (
     can_be_commander BOOLEAN,
     layout TEXT,
     produced_mana TEXT,      -- JSON array as TEXT
-    is_land BOOLEAN
+    is_land BOOLEAN,
+    image_uri TEXT           -- Scryfall CDN "normal"-size image (front face for multi-face cards)
 );
 
 CREATE TABLE IF NOT EXISTS card_names (
@@ -225,6 +226,7 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "weighted_cut": "REAL NOT NULL DEFAULT 0",
         "weighted_kept": "REAL NOT NULL DEFAULT 0",
     },
+    "cards": {"image_uri": "TEXT"},
 }
 
 
