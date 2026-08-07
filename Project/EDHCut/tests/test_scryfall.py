@@ -1,6 +1,7 @@
 from edhcut.ingest.scryfall import (
     _image_uri,
     build_card_row,
+    build_name_aliases,
     can_be_commander,
     is_commander_legal,
     normalize_name,
@@ -121,6 +122,33 @@ def test_can_be_commander_explicit_text() -> None:
 def test_is_commander_legal_filter() -> None:
     assert is_commander_legal(SOL_RING) is True
     assert is_commander_legal({"legalities": {"commander": "not_legal"}}) is False
+
+
+def test_build_name_aliases_prefers_a_cards_own_full_name_over_another_cards_face_name() -> None:
+    # Regression test: a real bug found live -- "Emeritus of Truce // Swords to Plowshares"
+    # (a "prepare"-layout card) has a face literally named "Swords to Plowshares", the same
+    # name as the real, separately-printed classic instant. A flat last-write-wins dict built
+    # in file order let whichever card came later silently steal the alias from the other,
+    # regardless of which one a person actually means by that name.
+    entries = [
+        ("classic-stp-id", "Swords to Plowshares", []),
+        ("prepare-card-id", "Emeritus of Truce // Swords to Plowshares", ["Emeritus of Truce", "Swords to Plowshares"]),
+    ]
+    aliases = build_name_aliases(entries)
+    assert aliases["swords to plowshares"] == "classic-stp-id"
+    assert aliases["emeritus of truce"] == "prepare-card-id"
+    assert aliases["emeritus of truce swords to plowshares"] == "prepare-card-id"
+
+
+def test_build_name_aliases_order_independent() -> None:
+    # Same scenario, cards processed in the opposite order -- the classic card's own name must
+    # still win regardless of which one the bulk file happens to list first.
+    entries = [
+        ("prepare-card-id", "Emeritus of Truce // Swords to Plowshares", ["Emeritus of Truce", "Swords to Plowshares"]),
+        ("classic-stp-id", "Swords to Plowshares", []),
+    ]
+    aliases = build_name_aliases(entries)
+    assert aliases["swords to plowshares"] == "classic-stp-id"
 
 
 def test_commander_legal_card_kept_regardless_of_representative_printing_games() -> None:

@@ -5,10 +5,13 @@ import pytest
 from edhcut.db import connect
 from edhcut.ingest.precon_retention import (
     DIFF_THRESHOLD,
+    PRECON_DIFF_FULL_TRUST_CEILING,
+    PRECON_OVERLAP_FLOOR,
     backfill_precon_card_retention,
     best_matching_precon,
     card_difference_count,
     cut_confidence,
+    deck_precon_trust,
     multiset_overlap,
 )
 
@@ -54,6 +57,34 @@ def _insert_deck(conn, deck_id, *, source_id, commander, partner=None, cards):
         [(deck_id, oid, qty) for oid, qty in cards.items()],
     )
     conn.commit()
+
+
+# --- deck_precon_trust (pure) ----------------------------------------------------------------
+
+def test_deck_precon_trust_full_at_or_below_diff_ceiling() -> None:
+    deck_total = 99
+    assert deck_precon_trust(0, deck_total) == 1.0
+    assert deck_precon_trust(PRECON_DIFF_FULL_TRUST_CEILING, deck_total) == 1.0
+
+
+def test_deck_precon_trust_zero_at_or_below_overlap_floor() -> None:
+    deck_total = 99
+    floor_diff = deck_total - PRECON_OVERLAP_FLOOR  # only PRECON_OVERLAP_FLOOR cards shared
+    assert deck_precon_trust(floor_diff, deck_total) == 0.0
+    assert deck_precon_trust(deck_total, deck_total) == 0.0  # 0 shared cards at all
+
+
+def test_deck_precon_trust_linear_between_ceiling_and_floor() -> None:
+    deck_total = 99
+    floor_diff = deck_total - PRECON_OVERLAP_FLOOR
+    midpoint = PRECON_DIFF_FULL_TRUST_CEILING + (floor_diff - PRECON_DIFF_FULL_TRUST_CEILING) / 2
+    assert deck_precon_trust(midpoint, deck_total) == pytest.approx(0.5)
+
+
+def test_deck_precon_trust_monotonically_decreasing() -> None:
+    deck_total = 99
+    values = [deck_precon_trust(d, deck_total) for d in (0, 10, 30, 50, 79, 99)]
+    assert values == sorted(values, reverse=True)
 
 
 # --- multiset_overlap / card_difference_count (pure) ----------------------------------------
@@ -192,9 +223,11 @@ def test_backfill_excludes_decks_beyond_diff_threshold_from_raw_counts(db) -> No
         db, 1, commander="krenko-uid",
         cards={"krenko-uid": 1, **{f"card{i}": 1 for i in range(30)}},
     )
-    # A totally different deck (0 shared cards with the precon library) -> not "similar" for
-    # the threshold-gated raw counts, but it still matches the commander, so it must still
-    # contribute (weakly) to weighted_cut/weighted_kept -- no hard cutoff there.
+    # A totally different deck (0 shared cards with the precon library, 30 of its own 30 cards
+    # unmatched) -> not "similar" for the threshold-gated raw counts. It still matches the
+    # commander, but deck_precon_trust(diff=30, deck_total=30) is 0 (floor_diff = 30-20 = 10,
+    # and 30 >= 10) -- too little overlap to assume this deck is even precon-derived, so it
+    # contributes nothing to weighted_cut/weighted_kept either, not just the raw counts.
     _insert_deck(
         db, 100, source_id="d100", commander="krenko-uid",
         cards={f"other{i}": 1 for i in range(30)},
@@ -210,8 +243,35 @@ def test_backfill_excludes_decks_beyond_diff_threshold_from_raw_counts(db) -> No
     ).fetchone()
     similar_deck_count, kept_count, weighted_cut, weighted_kept = row
     assert (similar_deck_count, kept_count) == (0, 0)  # excluded from the raw/threshold view
-    assert weighted_cut == pytest.approx(cut_confidence(30))  # diff = 30 (0 of 30 tracked cards overlap)
+    assert weighted_cut == pytest.approx(0.0)  # trust 0 -- no evidence either way
     assert weighted_kept == pytest.approx(0.0)
+
+
+def test_backfill_scales_weighted_evidence_by_deck_precon_trust(db) -> None:
+    # A deck with 50 total cards, 25 of which match the precon (staple + 24 pads) and 25 of
+    # which don't (25 new player cards) -> overlap=25, deck_total=50, diff=25. Not similar
+    # enough for full trust (floor_diff = 50-20 = 30, so trust is in the linear zone, not 0 or
+    # 1) -- trust = 1 - (25-10)/(30-10) = 0.25. Its "kept" contribution for the shared "staple"
+    # card should be exactly a quarter of what a diff-25 deck at full trust would contribute.
+    _insert_precon(
+        db, 1, commander="krenko-uid",
+        cards={"krenko-uid": 1, "staple": 1, **{f"pad{i}": 1 for i in range(49)}},
+    )
+    _insert_deck(
+        db, 100, source_id="d100", commander="krenko-uid",
+        cards={
+            "staple": 1, **{f"pad{i}": 1 for i in range(24)},  # 25 cards shared with the precon
+            **{f"new{i}": 1 for i in range(25)},  # 25 cards not in the precon at all
+        },
+    )
+    backfill_precon_card_retention(db, diff_threshold=DIFF_THRESHOLD)
+
+    row = db.execute(
+        "SELECT weighted_kept FROM precon_card_retention "
+        "WHERE precon_id = 1 AND oracle_id = 'staple'"
+    ).fetchone()
+    trust = 0.25
+    assert row[0] == pytest.approx(trust * (1.0 - cut_confidence(25)))
 
 
 def test_backfill_scopes_by_commander_key_not_just_precon(db) -> None:

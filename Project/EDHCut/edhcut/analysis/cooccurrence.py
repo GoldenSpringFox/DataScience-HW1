@@ -10,21 +10,50 @@ per-slot matrix, so a row number means the same card everywhere (plan §2.4's
 `card_index.parquet` contract) — a thin slot's matrix is just mostly-empty rows, not a
 differently-numbered universe.
 
-**Precon-contamination down-weighting** (plan §7's "for slots with precon contamination
-(Kyler), weight each deck by novelty" ask): each deck's contribution to every count is scaled
-by `deck_weight()` — full weight (1.0) up to `PRECON_SIMILARITY_THRESHOLD` (0.9, matching the
-plan's own example), then linear decay down to `PRECON_WEIGHT_FLOOR` (0.1) at similarity 1.0
-(an exact precon copy). This was picked over an explicit "group near-duplicates, cap the
-group's total weight" scheme because it needs no extra bookkeeping (no notion of *which*
-decks are near-duplicates of *each other*, only each deck's own similarity to its matched
-precon) and degrades the same way: if a slot's corpus ever did accumulate hundreds of
-near-identical decks at say similarity 0.95, each would individually land near the floor, so
-their collective contribution is bounded at roughly `floor * count`, not `1.0 * count` —
-literally "a few decks' worth, not hundreds." Checked against the live corpus before locking
-this in: only **1 of 1,230** harvested decks (a Kyler deck at 0.949) exceeds the 0.9
-threshold at all (see `docs/devlog/6.1-cooccurrence.md` for the full distribution) — the
-scheme is real and exercised, just not doing heavy lifting at today's corpus size; it's built
-to hold if that changes on a future re-harvest.
+**Precon-contamination down-weighting, per-card** (plan §7's "for slots with precon
+contamination (Kyler), weight each deck by novelty" ask; revised from an earlier whole-*deck*
+scheme — see below): a whole-deck novelty weight scaled *every* card in a near-precon deck
+identically, which penalized a card the deckbuilder consciously chose to keep exactly as much
+as a card only left in by inertia — no way to tell those apart at the deck level. Fixed by
+moving the down-weight to individual cards instead. For a deck that matches a precon (via
+`edhcut.ingest.precon_retention.best_matching_precon` — the same quantity-aware matching that
+built `precon_card_retention`, reused here rather than re-derived, so "which precon a deck
+matched" can't disagree between that table and this one):
+
+- A card the player added themselves — not part of that precon's own printed list — is never
+  down-weighted (weight 1.0 always). It can't be inertia; it wasn't there to begin with.
+- A card that *did* ship with the precon is weighted by `precon_card_weight()`, a function of
+  how often real deckbuilders keep it (`precon_card_retention.weighted_cut` /
+  `(weighted_cut + weighted_kept)`, aggregated across every deck that matched that precon under
+  that commander — see that table's own module docstring, `edhcut.ingest.precon_retention`, for
+  how *that* aggregation itself now also accounts for deck-precon trust): full weight (1.0) at a
+  cut rate of `PRECON_CUT_RATE_FULL_WEIGHT` (0.05) or below — i.e. kept 95%+ of the time, which
+  reads as a considered inclusion, not inertia — linear decay to 0 weight at a 100% cut rate (a
+  card that's *always* cut but still happens to be present in this one deck is the purest
+  inertia signal available).
+- That per-card weight is itself scaled by `deck_precon_trust()` (`edhcut.ingest.precon_retention`
+  — imported from there, not defined here, since that module needs it too for its own
+  `weighted_cut`/`weighted_kept` and `cooccurrence.py` already imports `best_matching_precon`
+  from it; the reverse would be circular) — *this specific deck's* own overlap with the precon's
+  card list, separate from the card's own aggregate cut rate. A card with a high aggregate cut
+  rate sitting in a deck that only shares a handful of cards with the precon isn't good evidence
+  of inertia — a deck that different was plausibly built from the ground up and just happens to
+  include that card on its own merits, not because it was inherited. See
+  `edhcut.ingest.precon_retention.deck_precon_trust`'s own docstring for the exact
+  `diff`/`deck_total`-based curve (0 trust at 20 or fewer quantity-aware shared cards, 1.0 trust
+  at 10 or fewer cards different from the precon).
+- A pair's joint weight is the *product* of its two cards' individual weights — if either card
+  is likely inertia, the pair's evidence is discounted accordingly; this also means a deck
+  where every card carries weight 1.0 (no precon match, low precon-overlap trust, or every
+  precon card cleared the 95% keep-rate bar) behaves exactly as if unweighted, the same as the
+  old scheme's inert case.
+- `total_weight` (`N`) is now just the deck count — under the old scheme a heavily-downweighted
+  deck shrank the effective sample size itself; now only its own precon-inertia cards do, via
+  their `weighted_marginal` contribution, so `N` stays a stable "how many decks" figure.
+
+This creates a real, direct dependency on `precon_card_retention` being already built and
+reasonably fresh — a deck matching a precon with no retention row yet for a given card (stale
+data, not yet backfilled) falls back to full weight for that card rather than guessing.
 
 **Smoothing & noise control** (plan §7's "small-corpus PMI noise" risk, sharpest for the
 29-deck Orysa slot): PMI uses add-`SMOOTHING_K` Laplace-style smoothing on both the joint and
@@ -34,12 +63,28 @@ is masked to zero in both PMI and lift regardless of the smoothed value, so 1-2 
 shared decks never manufacture an association. Lift is the same ratio without the add-k term
 (a plainer "how many times more often than chance" reading, meant for eyeballing rather than
 downstream math) but masked by the same raw-count floor.
+
+**t-score** (added later, ad hoc — not part of the original plan): `compute_tscore` answers a
+different question than PMI/lift — not "how much more than chance" (a *relative* effect size,
+which a rare pair can win by pure coincidence, exactly the failure mode the PMI discount above
+exists to fix) but "how confident am I this isn't noise" (a frequency-weighted question, where
+a pair needs *both* real co-occurrence volume and a real excess over chance to score highly).
+Same `min_pair_count` floor as PMI/lift, but no smoothing constant and no discount factor —
+the `sqrt(joint)` denominator provides equivalent low-count damping on its own. Checked live
+before adding: the whole global matrix's top-15 pairs by t-score are all real, broad
+multi-card archetype packages (e.g. the goblin-tribal cluster `Goblin Warchief`/
+`Skirk Prospector`/`Goblin Matron`/`Impact Tremors`, ~250-270 shared decks each, not a
+single fragile 2-card combo), while pure-PMI ranking (ignoring frequency) surfaces mostly
+6-10-deck coincidences with 100x+ lift — noise PMI's own discount factor doesn't fully catch
+since it only *shrinks* low-count pairs rather than weighing them against genuinely frequent
+ones on the same scale.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sqlite3
 from collections import Counter
@@ -56,11 +101,16 @@ from scipy import sparse
 from edhcut.config import CONFIG
 from edhcut.db import connect
 from edhcut.ingest.archidekt import _resolve_local_oracle_id, slot_key_for
+from edhcut.ingest.precon_retention import (
+    PRECON_DIFF_FULL_TRUST_CEILING,
+    PRECON_OVERLAP_FLOOR,
+    best_matching_precon,
+    deck_precon_trust,
+)
 from edhcut.ingest.scryfall import normalize_name
 
 MIN_DECK_COUNT = 3
-PRECON_SIMILARITY_THRESHOLD = 0.9
-PRECON_WEIGHT_FLOOR = 0.1
+PRECON_CUT_RATE_FULL_WEIGHT = 0.05
 SMOOTHING_K = 1.0
 MIN_PAIR_COUNT = 3
 
@@ -69,13 +119,18 @@ KB_DEV_DIR = CONFIG.paths.kb_dir / "dev"
 Pair = tuple[int, int]
 
 
-def deck_weight(precon_similarity: float | None) -> float:
-    """Novelty weight for one deck. See module docstring for the scheme and its rationale."""
-    if precon_similarity is None or precon_similarity <= PRECON_SIMILARITY_THRESHOLD:
+def precon_card_weight(cut_rate: float) -> float:
+    """Novelty weight for one *card* that shipped with a matched precon, as a function of how
+    often real deckbuilders cut it. See module docstring for the scheme and its rationale.
+    Full weight (1.0) at or below `PRECON_CUT_RATE_FULL_WEIGHT`, linear decay to 0 at a 100%
+    cut rate. Cards that didn't ship with the matched precon never call this — they're always
+    weight 1.0, unconditionally."""
+    if cut_rate <= PRECON_CUT_RATE_FULL_WEIGHT:
         return 1.0
-    span = 1.0 - PRECON_SIMILARITY_THRESHOLD
-    decay = (precon_similarity - PRECON_SIMILARITY_THRESHOLD) / span
-    return max(PRECON_WEIGHT_FLOOR, 1.0 - decay * (1.0 - PRECON_WEIGHT_FLOOR))
+    if cut_rate >= 1.0:
+        return 0.0
+    span = 1.0 - PRECON_CUT_RATE_FULL_WEIGHT
+    return 1.0 - (cut_rate - PRECON_CUT_RATE_FULL_WEIGHT) / span
 
 
 def build_card_index(conn: sqlite3.Connection, *, min_decks: int = MIN_DECK_COUNT) -> pd.DataFrame:
@@ -140,17 +195,81 @@ class CooccurrenceResult:
         return len(self.pair_weighted)
 
 
+def _precon_card_weight_overrides(
+    conn: sqlite3.Connection,
+    deck_qty: dict[int, dict[str, int]],
+    deck_commanders: dict[int, list[str]],
+) -> dict[int, dict[str, float]]:
+    """For every deck that matches a precon (via `best_matching_precon`, same matching
+    `precon_card_retention` itself was built with), weight each of *that precon's own* cards by
+    `precon_card_weight(cut_rate)`, scaled by `deck_precon_trust()` for how much of the precon
+    this specific deck actually still shares. Cards the player added themselves aren't part of
+    the returned per-deck dict at all, so callers should default missing entries to 1.0 -- see
+    module docstring."""
+    precon_cards_cache: dict[int, set[str]] = {}
+    retention_cache: dict[tuple[int, str], dict[str, float]] = {}  # (precon_id, commander_key) -> {oracle_id: cut_rate}
+    overrides: dict[int, dict[str, float]] = {}
+
+    for deck_id, commander_ids in deck_commanders.items():
+        if not commander_ids:
+            continue
+        match = best_matching_precon(conn, deck_qty[deck_id], commander_ids)
+        if match is None:
+            continue
+        precon_id, diff = match
+        commander_key = slot_key_for(commander_ids)
+
+        if precon_id not in precon_cards_cache:
+            own_commanders = set(commander_ids)
+            precon_cards_cache[precon_id] = {
+                oracle_id
+                for (oracle_id,) in conn.execute(
+                    "SELECT oracle_id FROM precon_cards WHERE precon_id = ?", (precon_id,)
+                )
+                if oracle_id not in own_commanders
+            }
+        tracked = precon_cards_cache[precon_id]
+
+        cache_key = (precon_id, commander_key)
+        if cache_key not in retention_cache:
+            cut_rates: dict[str, float] = {}
+            for oracle_id, weighted_cut, weighted_kept in conn.execute(
+                "SELECT oracle_id, weighted_cut, weighted_kept FROM precon_card_retention "
+                "WHERE precon_id = ? AND commander_key = ?",
+                cache_key,
+            ):
+                total = weighted_cut + weighted_kept
+                if total > 0:
+                    cut_rates[oracle_id] = weighted_cut / total
+            retention_cache[cache_key] = cut_rates
+        cut_rates = retention_cache[cache_key]
+
+        deck_total = sum(deck_qty[deck_id].values())
+        trust = deck_precon_trust(diff, deck_total)
+
+        deck_overrides = {
+            oracle_id: 1.0 - trust * (1.0 - precon_card_weight(cut_rates[oracle_id]))
+            for oracle_id in deck_qty[deck_id]
+            if oracle_id in tracked and oracle_id in cut_rates
+        }
+        if deck_overrides:
+            overrides[deck_id] = deck_overrides
+
+    return overrides
+
+
 def build_cooccurrence(
     conn: sqlite3.Connection, card_index: pd.DataFrame, *, slot_key: str | None = None
 ) -> CooccurrenceResult:
     """Weighted (novelty-adjusted) + raw co-occurrence counts over `card_index`'s row universe,
     scoped to one commander slot's decks (`slot_key`) or every deck (`slot_key=None`, global)."""
     oracle_to_row = dict(zip(card_index["oracle_id"], card_index["row"]))
+    row_to_oracle = {row: oracle_id for oracle_id, row in oracle_to_row.items()}
     n = len(card_index)
 
     query = (
-        "SELECT dc.deck_id, dc.oracle_id, d.precon_similarity FROM deck_cards dc "
-        "JOIN decks d ON d.deck_id = dc.deck_id"
+        "SELECT dc.deck_id, dc.oracle_id, dc.qty, d.commander_oracle_id, d.partner_oracle_id "
+        "FROM deck_cards dc JOIN decks d ON d.deck_id = dc.deck_id"
     )
     params: tuple = ()
     if slot_key is not None:
@@ -158,29 +277,33 @@ def build_cooccurrence(
         params = (slot_key,)
 
     by_deck: dict[int, set[int]] = {}
-    similarity_by_deck: dict[int, float | None] = {}
-    for deck_id, oracle_id, precon_similarity in conn.execute(query, params):
+    deck_qty: dict[int, dict[str, int]] = {}
+    deck_commanders: dict[int, list[str]] = {}
+    for deck_id, oracle_id, qty, commander_oracle_id, partner_oracle_id in conn.execute(query, params):
+        deck_qty.setdefault(deck_id, {})[oracle_id] = qty
+        if deck_id not in deck_commanders:
+            deck_commanders[deck_id] = [oid for oid in (commander_oracle_id, partner_oracle_id) if oid]
         row = oracle_to_row.get(oracle_id)
         if row is None:
             continue  # below the pool's min-deck-count threshold, not part of this index
         by_deck.setdefault(deck_id, set()).add(row)
-        similarity_by_deck[deck_id] = precon_similarity
+
+    weight_overrides = _precon_card_weight_overrides(conn, deck_qty, deck_commanders)
 
     pair_raw: Counter = Counter()
     pair_weighted: Counter = Counter()
     raw_marginal = np.zeros(n, dtype=np.int64)
     weighted_marginal = np.zeros(n, dtype=np.float64)
-    total_weight = 0.0
 
     for deck_id, rows in by_deck.items():
-        weight = deck_weight(similarity_by_deck[deck_id])
-        total_weight += weight
+        overrides = weight_overrides.get(deck_id, {})
+        card_weight = {r: overrides.get(row_to_oracle[r], 1.0) for r in rows}
         for r in rows:
             raw_marginal[r] += 1
-            weighted_marginal[r] += weight
+            weighted_marginal[r] += card_weight[r]
         for i, j in combinations(sorted(rows), 2):
             pair_raw[(i, j)] += 1
-            pair_weighted[(i, j)] += weight
+            pair_weighted[(i, j)] += card_weight[i] * card_weight[j]
 
     return CooccurrenceResult(
         n_cards=n,
@@ -188,7 +311,7 @@ def build_cooccurrence(
         pair_weighted=dict(pair_weighted),
         raw_marginal=raw_marginal,
         weighted_marginal=weighted_marginal,
-        total_weight=total_weight,
+        total_weight=float(len(by_deck)),
         deck_count=len(by_deck),
     )
 
@@ -261,6 +384,26 @@ def compute_lift(
     return _symmetric_sparse(lift_pairs, result.n_cards, dtype=np.float64)
 
 
+def compute_tscore(
+    result: CooccurrenceResult, *, min_pair_count: int = MIN_PAIR_COUNT
+) -> sparse.csr_matrix:
+    """t-score (see module docstring for why it was added alongside PMI/lift):
+    `(joint - expected) / sqrt(joint)`, `expected = marginal_i * marginal_j / N`. Same raw-count
+    mask as PMI/lift. No smoothing constant, no discount factor -- `sqrt(joint)` alone keeps a
+    pair resting on a handful of coincidental shared decks from outscoring a pair with real
+    volume behind it, which is what PMI's separate discount factor was built to approximate."""
+    marg = result.weighted_marginal
+    n_total = result.total_weight
+    tscore_pairs: dict[Pair, float] = {}
+    for pair, joint in result.pair_weighted.items():
+        if result.pair_raw[pair] < min_pair_count or joint <= 0:
+            continue
+        i, j = pair
+        expected = marg[i] * marg[j] / n_total
+        tscore_pairs[pair] = (joint - expected) / math.sqrt(joint)
+    return _symmetric_sparse(tscore_pairs, result.n_cards, dtype=np.float64)
+
+
 def _slot_label(commander_names: Iterable[str]) -> str:
     """Filesystem-friendly slug for a slot, e.g. ["Krenko, Mob Boss"] -> "krenko",
     ["Yoshimaru, Ever Faithful", "Bruse Tarl, Boorish Herder"] -> "yoshimaru_bruse_tarl".
@@ -322,8 +465,10 @@ def build_and_save(
         sparse.save_npz(out_dir / f"cooccur_{label}.npz", result.weighted_matrix())
         pmi = compute_pmi(result)
         lift = compute_lift(result)
+        tscore = compute_tscore(result)
         sparse.save_npz(out_dir / f"pmi_{label}.npz", pmi)
         sparse.save_npz(out_dir / f"lift_{label}.npz", lift)
+        sparse.save_npz(out_dir / f"tscore_{label}.npz", tscore)
         return ScopeStats(
             label=label,
             n_cards=result.n_cards,
@@ -345,8 +490,9 @@ def build_and_save(
     manifest = {
         "built_at": datetime.now(timezone.utc).isoformat(),
         "min_deck_count": min_decks,
-        "precon_similarity_threshold": PRECON_SIMILARITY_THRESHOLD,
-        "precon_weight_floor": PRECON_WEIGHT_FLOOR,
+        "precon_cut_rate_full_weight": PRECON_CUT_RATE_FULL_WEIGHT,
+        "precon_overlap_floor": PRECON_OVERLAP_FLOOR,
+        "precon_diff_full_trust_ceiling": PRECON_DIFF_FULL_TRUST_CEILING,
         "smoothing_k": SMOOTHING_K,
         "min_pair_count": MIN_PAIR_COUNT,
         "n_cards": len(card_index),
@@ -375,6 +521,10 @@ def load_card_index(out_dir: Path = KB_DEV_DIR) -> pd.DataFrame:
 
 def load_pmi(label: str, out_dir: Path = KB_DEV_DIR) -> sparse.csr_matrix:
     return sparse.load_npz(out_dir / f"pmi_{label}.npz")
+
+
+def load_tscore(label: str, out_dir: Path = KB_DEV_DIR) -> sparse.csr_matrix:
+    return sparse.load_npz(out_dir / f"tscore_{label}.npz")
 
 
 def top_associated(

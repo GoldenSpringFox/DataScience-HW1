@@ -1,11 +1,11 @@
 """Backfill `precon_card_retention` — per-card evidence of whether real deckbuilders kept or
 cut each precon card, scoped by precon AND by the commander context evaluating it. Follow-up
-to task 6.1: a whole-*deck* novelty weight (`edhcut.analysis.cooccurrence.deck_weight`) turned
-out too blunt for precon contamination, since it penalizes a card a deckbuilder consciously
-kept just as much as a card only left in by inertia. This module builds the per-*card* signal
-needed to fix that (see `docs/devlog/6.1-cooccurrence.md` and the design discussion that led
-here) — `cooccurrence.py` itself isn't touched yet; that's a deliberate follow-up once this
-table exists.
+to task 6.1: a whole-*deck* novelty weight (originally `edhcut.analysis.cooccurrence.deck_weight`,
+since replaced by that module's own per-card `precon_card_weight`) turned out too blunt for
+precon contamination, since it penalized a card a deckbuilder consciously kept just as much as
+a card only left in by inertia. This module builds the per-*card* signal `cooccurrence.py`
+consumes for that (see `docs/devlog/6.1-cooccurrence.md` and the design discussion that led
+here).
 
 Pure DB computation, no network access — runs against `decks`/`deck_cards` (5.3-B) and
 `precons`/`precon_cards` (`edhcut.ingest.precons`), same prerequisites as
@@ -51,9 +51,24 @@ evidence about the few cards it did cut (there was no reason to touch anything e
 cut was deliberate) but *weak* evidence about the untouched rest (inertia, not a conscious
 keep); a heavily rebuilt deck is the mirror image — cutting any one card among fifty swaps
 isn't very informative on its own, but a card that survived a near-total rebuild really was
-chosen. So every deck matching a precon (regardless of `DIFF_THRESHOLD`) contributes to *both*
-columns, weighted by `cut_confidence(diff)` (see its own docstring for the exact curve and how
-it was fit) — no hard cutoff, just proportioned confidence.
+chosen. So every deck matching a precon contributes to *both* columns, weighted by
+`cut_confidence(diff)` (see its own docstring for the exact curve and how it was fit).
+
+**`deck_precon_trust` — gates *whether a deck counts as evidence at all*, separate from
+`cut_confidence`'s cut/kept split.** `cut_confidence` alone implicitly assumes the deck
+actually *started* as the precon and was modified from there — for a deck that shares almost
+nothing with the precon's card list, that assumption itself is shaky; it's more likely an
+independently-built deck that happens to overlap on a few cards by coincidence than "the precon,
+heavily rebuilt." `deck_precon_trust(diff, deck_total)` returns 0 (no evidence either way) once
+a deck's quantity-aware overlap with the precon drops to `PRECON_OVERLAP_FLOOR` (20) shared
+cards or fewer — i.e. `diff >= deck_total - PRECON_OVERLAP_FLOOR` — and 1.0 (full confidence
+this deck *is* precon-derived) once `diff <= PRECON_DIFF_FULL_TRUST_CEILING` (10), linear in
+between. Both `cut_weight` and `kept_weight` are scaled by this trust before accumulating, so a
+low-trust deck contributes proportionally less to *both* columns rather than always splitting a
+full 1.0 of evidence between them regardless of how unrelated it actually looks. Lives here
+(not in `edhcut.analysis.cooccurrence`, its other caller) because this module already owns
+`diff`/`best_matching_precon`, and `cooccurrence.py` importing from here (not the reverse)
+avoids a circular import.
 """
 
 from __future__ import annotations
@@ -74,6 +89,9 @@ DIFF_THRESHOLD = 20
 
 RETENTION_WEIGHT_MIDPOINT = 20.0
 RETENTION_WEIGHT_SCALE = 10.0
+
+PRECON_OVERLAP_FLOOR = 20
+PRECON_DIFF_FULL_TRUST_CEILING = 10
 
 
 def cut_confidence(diff: int) -> float:
@@ -106,6 +124,27 @@ def card_difference_count(deck_cards: dict[str, int], precon_cards: dict[str, in
     precon's own recorded list is short a few cards (e.g. from unresolved names)."""
     deck_total = sum(deck_cards.values())
     return deck_total - multiset_overlap(deck_cards, precon_cards)
+
+
+def deck_precon_trust(diff: int, deck_total: int) -> float:
+    """How much a deck's cut/kept behavior should count as evidence that its precon cards'
+    presence (or absence) reflects the *precon*, rather than an independently-built deck that
+    happens to overlap by coincidence. See module docstring for the rationale.
+
+    1.0 at `diff <= PRECON_DIFF_FULL_TRUST_CEILING` (10) -- "up to 10 different cards" is close
+    enough that this deck is certainly precon-derived. 0.0 once quantity-aware overlap with the
+    precon drops to `PRECON_OVERLAP_FLOOR` (20) or below, i.e. `diff >= deck_total -
+    PRECON_OVERLAP_FLOOR` -- at that point the deck shares too little to assume it started as
+    the precon at all. Linear in between. `deck_total` is the deck's own physical card count
+    (from `card_difference_count`'s convention), so the floor is expressed in real shared cards
+    including copies (e.g. stacked basic lands), not distinct oracle_ids."""
+    if diff <= PRECON_DIFF_FULL_TRUST_CEILING:
+        return 1.0
+    floor_diff = deck_total - PRECON_OVERLAP_FLOOR
+    if diff >= floor_diff:
+        return 0.0
+    span = floor_diff - PRECON_DIFF_FULL_TRUST_CEILING
+    return 1.0 - (diff - PRECON_DIFF_FULL_TRUST_CEILING) / span
 
 
 def _deck_card_quantities(conn: sqlite3.Connection, deck_id: int) -> dict[str, int]:
@@ -148,6 +187,7 @@ def best_matching_precon(
 class _MatchedDeck(NamedTuple):
     deck_id: int
     diff: int
+    deck_total: int
     card_ids: frozenset[str]
 
 
@@ -186,7 +226,7 @@ def backfill_precon_card_retention(
             stats.decks_similar += 1
         commander_key = slot_key_for(commander_ids)
         matches[(precon_id, commander_key)].append(
-            _MatchedDeck(deck_id, diff, frozenset(deck_cards.keys()))
+            _MatchedDeck(deck_id, diff, sum(deck_cards.values()), frozenset(deck_cards.keys()))
         )
 
     rows: list[tuple[int, str, str, int, int, float, float]] = []
@@ -209,8 +249,9 @@ def backfill_precon_card_retention(
         weighted_cut: dict[str, float] = defaultdict(float)
         weighted_kept: dict[str, float] = defaultdict(float)
         for entry in entries:
-            cut_weight = cut_confidence(entry.diff)
-            kept_weight = 1.0 - cut_weight
+            trust = deck_precon_trust(entry.diff, entry.deck_total)
+            cut_weight = trust * cut_confidence(entry.diff)
+            kept_weight = trust * (1.0 - cut_confidence(entry.diff))
             for card_id in tracked_cards:
                 if card_id in entry.card_ids:
                     weighted_kept[card_id] += kept_weight

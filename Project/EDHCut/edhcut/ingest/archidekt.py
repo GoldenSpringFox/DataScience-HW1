@@ -664,11 +664,13 @@ def run(
     session: RateLimitedSession | None = None,
     *,
     slots: list[list[str]] | None = None,
+    decks_per_commander: int | None = None,
     show_progress: bool = True,
     log_path: Path | None = None,
 ) -> list[SlotHarvestStats]:
     session = session or get_session("archidekt")
     slots = CONFIG.commander_slots if slots is None else slots
+    decks_per_commander = CONFIG.decks_per_commander if decks_per_commander is None else decks_per_commander
     known_oracle_ids = {row[0] for row in conn.execute("SELECT oracle_id FROM cards")}
 
     log_file = None
@@ -681,7 +683,7 @@ def run(
         for commander_names in slots:
             stats = harvest_slot(
                 conn, session, commander_names, known_oracle_ids,
-                decks_per_commander=CONFIG.decks_per_commander,
+                decks_per_commander=decks_per_commander,
                 staleness_cutoff_days=CONFIG.deck_staleness_cutoff_days,
                 show_progress=show_progress,
                 log_file=log_file,
@@ -732,6 +734,13 @@ def main() -> None:
         help="Disable the tqdm progress bar (e.g. for non-interactive/log output).",
     )
     parser.add_argument(
+        "--max-decks", type=int, default=None,
+        help="Override config.decks_per_commander (default 300) for this run — e.g. a large "
+             "value to harvest every available valid deck for the selected slot(s), since "
+             "search_deck_listings() already stops naturally once Archidekt's own results run "
+             "dry (no artificial cap needed to avoid over-fetching).",
+    )
+    parser.add_argument(
         "--log-file", type=Path, default=CONFIG.paths.logs_dir / "archidekt_harvest_log.txt",
         help="Per-candidate audit log: '<commander>, problems: <...>, <url>' for every deck "
              "checked (not just kept ones) — appended to, so it accumulates across runs. "
@@ -743,7 +752,10 @@ def main() -> None:
     log_path = args.log_file if str(args.log_file) else None
 
     with connect(CONFIG.paths.db_path) as conn:
-        all_stats = run(conn, slots=slots, show_progress=not args.no_progress, log_path=log_path)
+        all_stats = run(
+            conn, slots=slots, decks_per_commander=args.max_decks,
+            show_progress=not args.no_progress, log_path=log_path,
+        )
 
     print()
     for stats in all_stats:

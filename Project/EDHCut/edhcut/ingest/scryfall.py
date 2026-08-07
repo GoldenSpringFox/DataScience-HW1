@@ -27,7 +27,7 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from tqdm import tqdm
 
@@ -201,6 +201,41 @@ def _write_cards(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> None:
     conn.commit()
 
 
+def build_name_aliases(entries: Iterable[tuple[str, str, list[str]]]) -> dict[str, str]:
+    """Merge each card's own full name plus its individual face names into one
+    `name_normalized -> oracle_id` lookup, giving a card's own full/official name priority
+    over any *other* card's face-name alias.
+
+    Two real, separately-printed cards can end up sharing a literal name for reasons other
+    than coincidence: a newer multi-faced card can have one face named after an existing
+    classic card it references. Found live: the "prepare" mechanic's
+    "Emeritus of Truce // Swords to Plowshares" has a face named exactly "Swords to
+    Plowshares" -- the real classic instant, a wholly separate card with its own oracle_id. A
+    flat last-write-wins dict built in bulk-file order let that face-name alias silently
+    clobber the real card's own alias depending only on which one happened to appear later in
+    the file (confirmed live: the classic card had zero `card_names` rows as a result).
+    Resolving in two passes -- every card's own full name first, face names only where
+    nothing has already claimed that key -- makes the outcome deterministic and always
+    prefers a card's own genuine identity over another card's incidental face-name reference
+    to it, regardless of processing order.
+    """
+    primary: dict[str, str] = {}
+    face_pairs: list[tuple[str, str]] = []
+    for oracle_id, name, face_names in entries:
+        key = normalize_name(name)
+        if key:
+            primary[key] = oracle_id
+        for face_name in face_names:
+            face_key = normalize_name(face_name)
+            if face_key:
+                face_pairs.append((face_key, oracle_id))
+
+    aliases = dict(primary)
+    for face_key, oracle_id in face_pairs:
+        aliases.setdefault(face_key, oracle_id)
+    return aliases
+
+
 def _write_card_names(conn: sqlite3.Connection, name_to_oracle_id: dict[str, str]) -> None:
     conn.executemany(
         """
@@ -246,7 +281,7 @@ def run(conn: sqlite3.Connection, session: RateLimitedSession | None = None) -> 
     total_cards = 0
     skipped_no_oracle_id = 0
     card_rows: list[dict[str, Any]] = []
-    name_to_oracle_id: dict[str, str] = {}
+    name_entries: list[tuple[str, str, list[str]]] = []
 
     for card in iter_bulk_lines(dest):
         total_cards += 1
@@ -259,10 +294,9 @@ def run(conn: sqlite3.Connection, session: RateLimitedSession | None = None) -> 
             continue
 
         card_rows.append(build_card_row(card))
-        for alias in {card["name"], *_face_names(card)}:
-            key = normalize_name(alias)
-            if key:
-                name_to_oracle_id[key] = oracle_id
+        name_entries.append((oracle_id, card["name"], _face_names(card)))
+
+    name_to_oracle_id = build_name_aliases(name_entries)
 
     _write_cards(conn, card_rows)
     _write_card_names(conn, name_to_oracle_id)
