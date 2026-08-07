@@ -465,6 +465,20 @@ Depends on: 5.3, 5.6 passing sanity checks.
 > and Krenko-slot `Skirk Prospector` surfaces a recognizable sac-outlet package
 > (Ashnod's Altar, Umbral Mantle, Goblin Sledder, Aggravated Assault).
 >
+> **Extended (2026-08-06/07)** — findings in `docs/devlog/6.1b-metric-refinement-and-comparison.md`.
+> A fourth association metric, **t-score** (`(joint - expected) / sqrt(joint)`), was added
+> alongside PMI/lift and validated against real cards across three comparison notebooks —
+> **the team's stated go-forward choice for co-occurrence-derived ranking**, since it rewards
+> well-*evidenced* pairings rather than pure ratio extremity (PMI/lift's small-sample pathology,
+> quantified: card popularity anti-correlates with lift-argmax-partner popularity at
+> Spearman ρ=-0.82 across a 400-card sample). Honest caveat kept on record, not smoothed over:
+> t-score can also demote a precise thematic match below generic popularity (Cultivate's own
+> Kodama's Reach pairing drops to #4 by t-score, behind three generically-popular cards) — not
+> a strictly-better replacement, a deliberate trade. Also fixed a real `card_names` alias
+> bug (multi-faced cards silently stealing another card's name) and redesigned the precon-card
+> weighting scheme (2 rounds) per user feedback. **T-score is not yet wired as the metric
+> downstream tasks consume** — that decision is still open going into task 6.2.
+>
 > Read `EDHCut/EDHCut_PLAN.md` §2.4, §7. Implement
 > `edhcut/analysis/cooccurrence.py`: build a card index (cards in ≥3 decks), then sparse
 > co-occurrence count matrices — global and per-commander-slot — from `deck_cards`.
