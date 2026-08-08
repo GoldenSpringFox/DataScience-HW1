@@ -479,6 +479,16 @@ Depends on: 5.3, 5.6 passing sanity checks.
 > weighting scheme (2 rounds) per user feedback. **T-score is not yet wired as the metric
 > downstream tasks consume** — that decision is still open going into task 6.2.
 >
+> **Extended again (2026-08-08, during 6.2)** — full detail in `docs/devlog/6.2-embeddings.md`'s
+> "Addendum 2". `top_associated` gained a **land/nonland category filter**, on by default
+> (`include_cross_category=True` opts out) — a Commander deck's land count is nearly fixed
+> regardless of which nonland cards it runs, so a land's PMI with any one nonland card mostly
+> reflects mana-base requirements, not a real association with that card specifically. Shared
+> `edhcut/analysis/card_categories.py` utility, applied identically to 6.2's `nearest_neighbors`
+> too rather than fixed twice. Also: `data/kb/dev/`'s matrices + `card_index.parquet` were
+> rebuilt against the corpus's continued growth (now 3,921 decks, up from 1,230 at 6.1's own
+> completion) — no longer stale as of this session's end.
+>
 > Read `EDHCut/EDHCut_PLAN.md` §2.4, §7. Implement
 > `edhcut/analysis/cooccurrence.py`: build a card index (cards in ≥3 decks), then sparse
 > co-occurrence count matrices — global and per-commander-slot — from `deck_cards`.
@@ -493,7 +503,47 @@ Depends on: 5.3, 5.6 passing sanity checks.
 ### Task 6.2 — Card embeddings + similarity index
 Depends on: 6.1.
 
-> **Prompt:** Implement `edhcut/analysis/embeddings.py`: gensim Word2Vec over
+> **Done (2026-08-07).** `edhcut/analysis/embeddings.py`, devlog `docs/devlog/6.2-embeddings.md`.
+> Word2Vec (7,537/31,623 cards, >=3-deck pool) + TF-IDF/SVD (all 31,623 commander-legal cards)
+> both written to `embeddings.parquet`. Sanity CLI reproduces the named example independently in
+> **both** spaces: Cultivate's #1 neighbor is Kodama's Reach (w2v +0.979, tfidf +0.999).
+> **Extension beyond the original prompt, per explicit user request mid-task**: a `struct_*`
+> feature block (z-scored `cmc`, per-color mana-pip counts, power/toughness with
+> variable-stat/non-creature flags) concatenated onto the TF-IDF/SVD output specifically (not
+> Word2Vec's) — oracle_text/type_line alone carry zero color-cost signal, which Word2Vec doesn't
+> need this augmentation for (it gets color identity implicitly via deck legality) but TF-IDF
+> does. Required adding `power`/`toughness` as new `cards` columns (didn't exist before this
+> task) and re-running the Scryfall ingest to backfill them. Known simplification, not yet
+> tuned: the 12-column struct block is unweighted relative to TF-IDF's 64 dims in a combined
+> similarity search — revisit once a downstream consumer needs it.
+> **Environment impediment**: gensim has no Python 3.14 wheel and its shipped C source doesn't
+> build there at all (confirmed with a full MSVC Build Tools install — a genuine upstream
+> incompatibility with CPython 3.14's changed internals, not a missing-compiler issue). Resolved
+> with a second venv, `venv311/` (Python 3.11) at repo root; only gensim needs it (`scikit-learn`
+> has no such issue and is a core dependency, used by `embeddings.py`'s TF-IDF/SVD and by
+> notebooks doing their own dimensionality reduction, both fine on 3.14).
+>
+> **Redesigned twice more, same session, driven by live user testing against the exploration
+> notebook** — full detail in the devlog's "Addendum 2," current state is what matters:
+> the `tfidf` space is now **four independently-normalized, fixed-weight blocks** (oracle text
+> 0.6, type_line 0.15, mana cost 0.15, power/toughness 0.1, the last redistributed onto cost+
+> types for non-creatures) rather than one shared TF-IDF bag-of-words plus a single `struct_*`
+> block — splitting oracle_text from type_line fixed a real bug where a terse card's shared
+> *type* word ("Human") mattered more to its similarity than its actual mana ability, because a
+> short document's few surviving tokens dominate its bag-of-words direction. Oracle text also
+> gained a custom tokenizer (`_ORACLE_TEXT_TOKEN_PATTERN`) keeping `{T}`/`{W}`-style mana symbols
+> as real tokens — sklearn's default silently drops any bare single-letter symbol. Separately, a
+> **land/nonland category filter** (`edhcut/analysis/card_categories.py`, shared with 6.1's
+> `top_associated` — see 6.1's own plan entry) was added to `nearest_neighbors`, on by default,
+> after fixing the tokenizer/block-split surfaced a new problem: with oracle-text weighted at
+> 0.6, a land whose ability text matches a creature's almost word-for-word (`Plains` vs. Avacyn's
+> Pilgrim, both `{T}: Add {W}.`) scored nearly as high as the genuine creature match.
+> **Also found, same session**: the deck corpus kept growing between sessions (the user's own
+> previously-flagged uncapped Archidekt harvest continuing) — now 3,921 decks. Task 6.1's
+> matrices and `card_index.parquet` were rebuilt against this corpus as part of verifying the
+> category filter; `precon_card_retention` was not.
+>
+> **Original prompt:** Implement `edhcut/analysis/embeddings.py`: gensim Word2Vec over
 > decklists-as-sentences (deck = "sentence" of oracle_ids, shuffled a few times per epoch
 > since order is meaningless; large window; vector_size≈64, min_count=3). Save to
 > `embeddings.parquet`. Add complementary TF-IDF vectors over oracle_text + type_line

@@ -19,6 +19,8 @@ SOL_RING = {
     "keywords": [],
     "rarity": "uncommon",
     "edhrec_rank": 1,
+    "power": None,
+    "toughness": None,
     "prices": {"usd": "2.50"},
     "game_changer": False,
     "legalities": {"commander": "legal"},
@@ -46,6 +48,8 @@ TRANSFORM_CARD = {
             "mana_cost": "{2}",
             "oracle_text": "At the beginning of your upkeep...",
             "colors": [],
+            "power": "2",
+            "toughness": "3",
             "image_uris": {"normal": "https://cards.scryfall.io/normal/front/d/e/captive.jpg"},
         },
         {
@@ -77,6 +81,8 @@ def test_build_card_row_single_face() -> None:
     assert row["is_land"] is False
     assert row["can_be_commander"] is False
     assert row["image_uri"] == "https://cards.scryfall.io/normal/front/a/b/sol-ring.jpg"
+    assert row["power"] is None
+    assert row["toughness"] is None
 
 
 def test_build_card_row_falls_back_to_face_text_for_multi_face_cards() -> None:
@@ -85,6 +91,8 @@ def test_build_card_row_falls_back_to_face_text_for_multi_face_cards() -> None:
     assert "Trample" in row["oracle_text"]
     assert row["colors"] == "[\"G\"]"
     assert row["image_uri"] == "https://cards.scryfall.io/normal/front/d/e/captive.jpg"
+    assert row["power"] == "2"
+    assert row["toughness"] == "3"
 
 
 def test_image_uri_prefers_top_level() -> None:

@@ -14,6 +14,7 @@ dependencies = [
     "numpy>=1.26",
     "scipy>=1.11",
     "pillow>=10.0",
+    "scikit-learn>=1.4",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +25,20 @@ notebooks = [
     "jupyter>=1.0",
     "nbformat>=5.10",
     "matplotlib>=3.8",
+    "ipywidgets>=8.0",
+    "anywidget>=0.9",  # plotly>=6's go.FigureWidget requires this (interactive hover widgets)
+]
+# edhcut/analysis/embeddings.py's train_word2vec/word2vec_frame (task 6.2) only. Deliberately
+# NOT a core dependency: gensim's shipped C source uses CPython internals (PyLongObject layout,
+# _PyLong_AsByteArray's old signature) that Python 3.14 changed, so it has no wheel and cannot
+# even build from source on the repo's shared Python 3.14 venv (confirmed live -- fails the same
+# way with a working MSVC compiler). scikit-learn has no such issue (it's a core dependency,
+# used by embeddings.py's TF-IDF/SVD step and by notebooks doing their own dimensionality
+# reduction, both fine on 3.14) -- only gensim needs the separate `venv311/` (Python 3.11) venv
+# at repo root. See CONTEXT.md/project memory for why a second venv was reintroduced despite the
+# earlier decision to avoid one.
+embeddings = [
+    "gensim>=4.3",
 ]
 
 [dependency-groups]

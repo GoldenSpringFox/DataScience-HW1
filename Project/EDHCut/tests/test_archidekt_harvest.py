@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import requests
 
 from edhcut.db import connect
 from edhcut.ingest.archidekt import harvest_slot
@@ -87,12 +88,16 @@ def _filler(quantity: int) -> dict:
 
 
 class _FakeResponse:
-    def __init__(self, *, json_data=None, text=None):
+    def __init__(self, *, json_data=None, text=None, status_code=200):
         self._json = json_data
         self.text = text or ""
+        self.status_code = status_code
 
     def raise_for_status(self):
-        pass
+        if self.status_code >= 400:
+            err = requests.exceptions.HTTPError(f"{self.status_code} error")
+            err.response = self
+            raise err
 
     def json(self):
         return self._json
@@ -112,6 +117,10 @@ class FakeArchidektSession:
             return _FakeResponse(text=self._search_pages[page - 1])
         deck_id = int(url.rstrip("/").rsplit("/", 1)[-1])
         self.deck_requests.append(deck_id)
+        # A deck_id absent from the fixture dict simulates Archidekt 404ing a deck that
+        # showed up in search results but was deleted/made private since being indexed.
+        if deck_id not in self._decks:
+            return _FakeResponse(status_code=404)
         return _FakeResponse(json_data=self._decks[deck_id])
 
 
@@ -196,6 +205,27 @@ def test_skips_stale_decks_without_fetching_them(db_with_cards) -> None:
     assert stats.stale_skipped == 1
     assert stats.decks_kept == 1
     assert session.deck_requests == [2]  # never fetched the stale one
+
+
+def test_deck_that_404s_is_skipped_not_fatal(db_with_cards) -> None:
+    """A deck can surface in search results and then 404 by fetch time (deleted/made private
+    since being indexed) — the harvester should skip it and keep going, not abort the slot."""
+    conn = db_with_cards
+    session = FakeArchidektSession(
+        search_pages=[_next_data_html([_listing(1, RECENT), _listing(2, RECENT)], has_next=False)],
+        decks={2: _deck_json(
+            2, commander_uid="krenko-uid", commander_name="Krenko, Mob Boss",
+            extra_cards=[_filler(99)],
+        )},  # deck 1 deliberately absent -> FakeArchidektSession serves it as a 404
+    )
+    stats = harvest_slot(
+        conn, session, ["Krenko, Mob Boss"], {"krenko-uid", "filler-uid"},
+        decks_per_commander=10, staleness_cutoff_days=730, show_progress=False,
+    )
+    assert stats.fetch_failed == 1
+    assert stats.decks_kept == 1
+    assert stats.error is None
+    assert session.deck_requests == [1, 2]  # both attempted; the 404 didn't stop the second
 
 
 def test_single_commander_mismatch_is_flagged(db_with_cards) -> None:

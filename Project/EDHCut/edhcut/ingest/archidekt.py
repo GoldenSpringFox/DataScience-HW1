@@ -35,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator, TextIO
 
+import requests
 from tqdm import tqdm
 
 from edhcut.config import CONFIG
@@ -198,6 +199,7 @@ def deck_log_line(
     stale: bool = False,
     mismatch: bool = False,
     wrong_size: bool = False,
+    fetch_failed: str | None = None,
     illegal_count: int = 0,
     illegal_names: list[str] | None = None,
 ) -> str:
@@ -211,6 +213,8 @@ def deck_log_line(
         problems.append("mismatch")
     if wrong_size:
         problems.append("wrong_size")
+    if fetch_failed:
+        problems.append(f"fetch_failed ({fetch_failed})")
     if illegal_count:
         shown = ", ".join((illegal_names or [])[:MAX_ILLEGAL_NAMES_IN_LOG])
         problems.append(f"illegal_cards [{illegal_count}] ({shown})")
@@ -278,6 +282,7 @@ class SlotHarvestStats:
     stale_skipped: int = 0
     commander_mismatch_rejected: int = 0
     invalid_size_rejected: int = 0
+    fetch_failed: int = 0
     decks_kept: int = 0
     cards_written: int = 0
     unresolved_oracle_ids: int = 0
@@ -440,6 +445,7 @@ def _harvest_pass(
             stale=stats.stale_skipped,
             mismatch=stats.commander_mismatch_rejected,
             bad_size=stats.invalid_size_rejected,
+            fetch_failed=stats.fetch_failed,
             unresolved=stats.unresolved_oracle_ids,
             refresh=False,
         )
@@ -451,7 +457,21 @@ def _harvest_pass(
             _write_log(log_file, deck_log_line(log_label, deck_url(listing["id"]), stale=True))
             continue
 
-        deck = fetch_deck(session, listing["id"])
+        # A deck can surface in Archidekt's own search index and still 404/403 by the time we
+        # actually fetch it — deleted or made private after being indexed, which becomes likely
+        # once an uncapped harvest is paging through thousands of search results rather than
+        # just the first 300. Skip it (it's gone, not a bug in this code) rather than letting
+        # the exception propagate and abort the rest of this slot's harvest.
+        try:
+            deck = fetch_deck(session, listing["id"])
+        except requests.exceptions.HTTPError as exc:
+            stats.fetch_failed += 1
+            seen_source_ids.add(source_id)
+            status = exc.response.status_code if exc.response is not None else "?"
+            _write_log(log_file, deck_log_line(
+                log_label, deck_url(listing["id"]), fetch_failed=str(status),
+            ))
+            continue
         seen_source_ids.add(source_id)
         deck_commander_ids = [card_oracle_id(c) for c in commander_cards(deck)]
 
@@ -646,6 +666,7 @@ def _write_ingest_log(conn: sqlite3.Connection, stats: SlotHarvestStats) -> None
             f"stale_skipped={stats.stale_skipped} "
             f"commander_mismatch_rejected={stats.commander_mismatch_rejected} "
             f"invalid_size_rejected={stats.invalid_size_rejected} "
+            f"fetch_failed={stats.fetch_failed} "
             f"decks_kept={stats.decks_kept} cards_written={stats.cards_written} "
             f"flagged={len(stats.flagged)}"
             + (
@@ -704,7 +725,8 @@ def _print_summary(stats: SlotHarvestStats) -> None:
         f"(checked {stats.candidates_checked} candidates, "
         f"{stats.stale_skipped} stale-skipped, "
         f"{stats.commander_mismatch_rejected} commander-mismatch, "
-        f"{stats.invalid_size_rejected} wrong-size), "
+        f"{stats.invalid_size_rejected} wrong-size, "
+        f"{stats.fetch_failed} fetch-failed), "
         f"{stats.cards_written} card rows written, "
         f"{stats.unresolved_oracle_ids} unresolved oracle_ids"
     )
@@ -714,9 +736,10 @@ def _print_summary(stats: SlotHarvestStats) -> None:
             f"{stats.fallback_decks} run one partner at the pair's color identity"
         )
     if stats.flagged:
-        print(f"  Flagged for manual review ({len(stats.flagged)}):")
-        for flag in stats.flagged:
-            print(f"    - {flag.url} — {flag.reason}")
+        # Full per-deck URL/reason list used to print here (noisy for a large harvest) -- each
+        # flagged deck is already in the per-candidate audit log (--log-file) with its own
+        # reason, so the count alone is enough for the console summary.
+        print(f"  Flagged for manual review ({len(stats.flagged)}) — see the audit log for details.")
     if stats.error:
         print(f"  STOPPED: {stats.error}")
 

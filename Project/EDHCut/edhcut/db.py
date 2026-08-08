@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS cards (
     oracle_text TEXT,
     colors TEXT,            -- JSON array as TEXT
     color_identity TEXT,    -- JSON array as TEXT
+    power TEXT,              -- raw Scryfall string, e.g. "*", "1+*" -- not always numeric
+    toughness TEXT,          -- same caveats as power
     keywords TEXT,           -- JSON array as TEXT
     rarity TEXT,
     edhrec_rank INTEGER,
@@ -226,7 +228,7 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "weighted_cut": "REAL NOT NULL DEFAULT 0",
         "weighted_kept": "REAL NOT NULL DEFAULT 0",
     },
-    "cards": {"image_uri": "TEXT"},
+    "cards": {"image_uri": "TEXT", "power": "TEXT", "toughness": "TEXT"},
 }
 
 

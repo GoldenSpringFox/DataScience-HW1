@@ -159,6 +159,8 @@ def build_card_row(card: dict) -> dict[str, Any]:
         "oracle_text": card.get("oracle_text") or _face_field(card, "oracle_text"),
         "colors": json.dumps(_colors(card)),
         "color_identity": json.dumps(card.get("color_identity") or []),
+        "power": card.get("power") or _face_field(card, "power"),
+        "toughness": card.get("toughness") or _face_field(card, "toughness"),
         "keywords": json.dumps(card.get("keywords") or []),
         "rarity": card.get("rarity"),
         "edhrec_rank": card.get("edhrec_rank"),
@@ -178,17 +180,20 @@ def _write_cards(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> None:
         """
         INSERT INTO cards (
             oracle_id, name, mana_cost, cmc, type_line, oracle_text, colors,
-            color_identity, keywords, rarity, edhrec_rank, price_usd, game_changer,
-            legal_commander, can_be_commander, layout, produced_mana, is_land, image_uri
+            color_identity, power, toughness, keywords, rarity, edhrec_rank, price_usd,
+            game_changer, legal_commander, can_be_commander, layout, produced_mana, is_land,
+            image_uri
         ) VALUES (
             :oracle_id, :name, :mana_cost, :cmc, :type_line, :oracle_text, :colors,
-            :color_identity, :keywords, :rarity, :edhrec_rank, :price_usd, :game_changer,
-            :legal_commander, :can_be_commander, :layout, :produced_mana, :is_land, :image_uri
+            :color_identity, :power, :toughness, :keywords, :rarity, :edhrec_rank, :price_usd,
+            :game_changer, :legal_commander, :can_be_commander, :layout, :produced_mana,
+            :is_land, :image_uri
         )
         ON CONFLICT(oracle_id) DO UPDATE SET
             name=excluded.name, mana_cost=excluded.mana_cost, cmc=excluded.cmc,
             type_line=excluded.type_line, oracle_text=excluded.oracle_text,
             colors=excluded.colors, color_identity=excluded.color_identity,
+            power=excluded.power, toughness=excluded.toughness,
             keywords=excluded.keywords, rarity=excluded.rarity,
             edhrec_rank=excluded.edhrec_rank, price_usd=excluded.price_usd,
             game_changer=excluded.game_changer, legal_commander=excluded.legal_commander,

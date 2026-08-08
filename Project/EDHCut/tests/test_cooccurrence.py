@@ -28,9 +28,13 @@ def db(tmp_path):
 
 def _ensure_cards(conn, *oracle_ids: str) -> None:
     conn.executemany(
-        "INSERT OR IGNORE INTO cards (oracle_id, name) VALUES (?, ?)",
+        "INSERT OR IGNORE INTO cards (oracle_id, name, is_land) VALUES (?, ?, 0)",
         [(oid, oid) for oid in oracle_ids],
     )
+
+
+def _mark_land(conn, *oracle_ids: str) -> None:
+    conn.executemany("UPDATE cards SET is_land = 1 WHERE oracle_id = ?", [(oid,) for oid in oracle_ids])
 
 
 def _insert_deck(
@@ -444,3 +448,44 @@ def test_top_associated_raises_for_unknown_card(db) -> None:
 
     with pytest.raises(KeyError):
         top_associated(pmi, index, "nonexistent-oracle-id")
+
+
+def test_top_associated_excludes_cross_category_by_default(db) -> None:
+    # "a" (nonland) co-occurs with both "spell" (nonland) and "plains" (land) every time --
+    # equally strong PMI either way -- but the land shouldn't surface as a "similar card."
+    for i in range(4):
+        _insert_deck(db, i, slot_key="s", cards=["a", "spell", "plains"])
+    _mark_land(db, "plains")
+    index = build_card_index(db, min_decks=1)
+    result = build_cooccurrence(db, index, slot_key=None)
+    pmi = compute_pmi(result, min_pair_count=1)
+
+    a_oracle_id = index.loc[index["name"] == "a", "oracle_id"].iloc[0]
+    top = top_associated(pmi, index, a_oracle_id, k=5)
+    assert list(top["name"]) == ["spell"]
+
+
+def test_top_associated_include_cross_category_opts_back_in(db) -> None:
+    for i in range(4):
+        _insert_deck(db, i, slot_key="s", cards=["a", "spell", "plains"])
+    _mark_land(db, "plains")
+    index = build_card_index(db, min_decks=1)
+    result = build_cooccurrence(db, index, slot_key=None)
+    pmi = compute_pmi(result, min_pair_count=1)
+
+    a_oracle_id = index.loc[index["name"] == "a", "oracle_id"].iloc[0]
+    top = top_associated(pmi, index, a_oracle_id, k=5, include_cross_category=True)
+    assert set(top["name"]) == {"spell", "plains"}
+
+
+def test_top_associated_land_query_still_finds_other_lands(db) -> None:
+    for i in range(4):
+        _insert_deck(db, i, slot_key="s", cards=["plains", "island", "spell"])
+    _mark_land(db, "plains", "island")
+    index = build_card_index(db, min_decks=1)
+    result = build_cooccurrence(db, index, slot_key=None)
+    pmi = compute_pmi(result, min_pair_count=1)
+
+    plains_id = index.loc[index["name"] == "plains", "oracle_id"].iloc[0]
+    top = top_associated(pmi, index, plains_id, k=5)
+    assert list(top["name"]) == ["island"]

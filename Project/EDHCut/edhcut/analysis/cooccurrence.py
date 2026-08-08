@@ -98,6 +98,7 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
+from edhcut.analysis.card_categories import same_category_mask
 from edhcut.config import CONFIG
 from edhcut.db import connect
 from edhcut.ingest.archidekt import _resolve_local_oracle_id, slot_key_for
@@ -136,10 +137,11 @@ def precon_card_weight(cut_rate: float) -> float:
 def build_card_index(conn: sqlite3.Connection, *, min_decks: int = MIN_DECK_COUNT) -> pd.DataFrame:
     """Cards in >= `min_decks` distinct decks: `oracle_id`, `name`, `deck_count` (raw, global —
     the pool-membership test, independent of the novelty weighting applied to actual counts),
+    `is_land` (for `top_associated`'s land/nonland category filter, `card_categories.py`),
     `row` (0-based, `oracle_id`-sorted — the index every matrix in this module shares)."""
     rows = conn.execute(
         """
-        SELECT dc.oracle_id, c.name, COUNT(DISTINCT dc.deck_id) AS deck_count
+        SELECT dc.oracle_id, c.name, c.is_land, COUNT(DISTINCT dc.deck_id) AS deck_count
         FROM deck_cards dc
         JOIN cards c ON c.oracle_id = dc.oracle_id
         GROUP BY dc.oracle_id
@@ -148,7 +150,7 @@ def build_card_index(conn: sqlite3.Connection, *, min_decks: int = MIN_DECK_COUN
         """,
         (min_decks,),
     ).fetchall()
-    df = pd.DataFrame(rows, columns=["oracle_id", "name", "deck_count"])
+    df = pd.DataFrame(rows, columns=["oracle_id", "name", "is_land", "deck_count"])
     df["row"] = np.arange(len(df), dtype=np.int64)
     return df
 
@@ -528,21 +530,35 @@ def load_tscore(label: str, out_dir: Path = KB_DEV_DIR) -> sparse.csr_matrix:
 
 
 def top_associated(
-    pmi: sparse.csr_matrix, card_index: pd.DataFrame, oracle_id: str, *, k: int = 20
+    pmi: sparse.csr_matrix,
+    card_index: pd.DataFrame,
+    oracle_id: str,
+    *,
+    k: int = 20,
+    include_cross_category: bool = False,
 ) -> pd.DataFrame:
-    """Top-`k` cards by PMI against `oracle_id` within this matrix's scope."""
+    """Top-`k` cards by PMI against `oracle_id` within this matrix's scope. Excludes land/nonland
+    cross-category matches by default (`card_categories.same_category_mask` -- a land's near-fixed
+    per-deck slot count means its PMI with any one nonland card mostly reflects mana-base
+    requirements, not a real association with that specific card); pass
+    `include_cross_category=True` to opt back in."""
     match = card_index.index[card_index["oracle_id"] == oracle_id]
     if len(match) == 0:
         raise KeyError(f"{oracle_id!r} is not in this card index (below the min-deck-count pool cutoff?)")
     row = int(card_index.loc[match[0], "row"])
+    query_is_land = bool(card_index.loc[match[0], "is_land"])
 
     vec = np.asarray(pmi[row].todense()).ravel()
     order = np.argsort(-vec)
-    rows_by_index = card_index.set_index("row")
+    rows_by_index = card_index.set_index("row").sort_index()
+    is_land_by_row = rows_by_index["is_land"].to_numpy()
+    allowed = same_category_mask(is_land_by_row, query_is_land, include_cross_category=include_cross_category)
 
     results = []
     for other_row in order:
         if other_row == row or vec[other_row] == 0:
+            continue
+        if not allowed[other_row]:
             continue
         other = rows_by_index.loc[int(other_row)]
         results.append({"oracle_id": other["oracle_id"], "name": other["name"], "pmi": float(vec[other_row])})
@@ -576,7 +592,7 @@ def _cmd_top(args: argparse.Namespace) -> None:
         oracle_id = _resolve_card_name(conn, args.card)
     card_index = load_card_index()
     pmi = load_pmi(args.slot or "global")
-    table = top_associated(pmi, card_index, oracle_id, k=args.k)
+    table = top_associated(pmi, card_index, oracle_id, k=args.k, include_cross_category=args.include_cross_category)
     if table.empty:
         print(f"No associations found for {args.card!r} in scope {args.slot or 'global'!r}.")
         return
@@ -599,6 +615,11 @@ def main() -> None:
         help="Slot label to scope to (e.g. 'krenko', 'yoshimaru_bruse_tarl'); default: global",
     )
     top_p.add_argument("-k", type=int, default=20)
+    top_p.add_argument(
+        "--include-cross-category", action="store_true",
+        help="Include land/nonland cross-category matches (excluded by default -- see "
+        "edhcut.analysis.card_categories)",
+    )
     top_p.set_defaults(func=_cmd_top)
 
     args = parser.parse_args()
