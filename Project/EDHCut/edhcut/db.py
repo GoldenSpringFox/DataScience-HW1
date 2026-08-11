@@ -56,6 +56,11 @@ CREATE TABLE IF NOT EXISTS decks (
     -- the commander columns hold that deck's *real* commanders while slot_key still groups it
     -- into the pair's corpus.
     slot_key TEXT,
+    -- 'roster' (the original 5-slot harvest, task 5.3-B) or 'meta_sample' (task 5.7's broad
+    -- metagame sample, keyed against meta_commanders.slot_key). Lets analyses opt into either
+    -- the full-resolution roster corpus, the diverse meta sample, or both -- see EDHCut_PLAN.md
+    -- task 5.7's design-weighting decision for why this needs to be selectable, not merged.
+    cohort TEXT NOT NULL DEFAULT 'roster',
     fetched_at TEXT,
     views INTEGER,
     updated_at TEXT,
@@ -192,6 +197,30 @@ CREATE TABLE IF NOT EXISTS edhrec_themes_per_commander (
     PRIMARY KEY (commander_key, theme)
 );
 
+-- Metagame commander pool (task 5.7): every commander at/above the deck-count threshold across
+-- all 32 EDHREC colour-identity pages -- the source list the meta-sample harvest (5.7) draws
+-- from and the deck-weighting scheme (design weight = true edhrec_num_decks share / harvested
+-- share) reads at analysis time. `color_identity` is the EDHREC page slug the commander was
+-- listed under (e.g. 'rg'), not a full WUBRG string. `sample_target` is the sqrt-share deck
+-- allocation computed at harvest-list build time (see edhcut/ingest/edhrec_commanders.py) --
+-- stored rather than recomputed downstream so the harvester and any later audit agree on what
+-- the target *was*, even if the live EDHREC numbers drift on a later re-run.
+-- `slot_key`/`commander_oracle_id`/`partner_oracle_id` mirror `decks`'s own commander/partner
+-- modeling exactly (same `edhcut.ingest.archidekt.slot_key_for` convention) -- EDHREC lists a
+-- partner-pair commander as one row with `name` = "A // B"; ~4.3% of the pool is pairs like this
+-- (confirmed live, 2026-08-09), so a single-`oracle_id` row can't represent every commander.
+CREATE TABLE IF NOT EXISTS meta_commanders (
+    slot_key TEXT PRIMARY KEY,
+    commander_oracle_id TEXT NOT NULL REFERENCES cards(oracle_id),
+    partner_oracle_id TEXT REFERENCES cards(oracle_id),
+    name TEXT NOT NULL,
+    color_identity TEXT NOT NULL,
+    edhrec_num_decks INTEGER NOT NULL,
+    edhrec_rank INTEGER,
+    sample_target INTEGER NOT NULL,
+    fetched_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS ingest_log (
     source TEXT NOT NULL,
     run_at TEXT NOT NULL,
@@ -214,6 +243,7 @@ TABLE_NAMES: tuple[str, ...] = (
     "edhrec_card_stats",
     "edhrec_themes",
     "edhrec_themes_per_commander",
+    "meta_commanders",
     "ingest_log",
 )
 
@@ -223,7 +253,7 @@ TABLE_NAMES: tuple[str, ...] = (
 # never gain it — these are ALTERed in explicitly. Keep in sync with the CREATE TABLE
 # statements above (a fresh database gets them from there and skips the ALTER).
 ADDED_COLUMNS: dict[str, dict[str, str]] = {
-    "decks": {"slot_key": "TEXT"},
+    "decks": {"slot_key": "TEXT", "cohort": "TEXT NOT NULL DEFAULT 'roster'"},
     "precon_card_retention": {
         "weighted_cut": "REAL NOT NULL DEFAULT 0",
         "weighted_kept": "REAL NOT NULL DEFAULT 0",

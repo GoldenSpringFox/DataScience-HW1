@@ -29,7 +29,7 @@ import numpy as np
 from matplotlib.colors import LogNorm, SymLogNorm, TwoSlopeNorm
 from scipy import sparse
 
-from edhcut.analysis.cooccurrence import KB_DEV_DIR, load_card_index
+from edhcut.analysis.cooccurrence import KB_DEV_DIR, assert_dense_matrix_safe, load_card_index
 
 
 def _cmap_and_norm(data: np.ndarray, vmax: float, *, scale: str, center: float | None = None):
@@ -96,6 +96,11 @@ def plot_overview(kind: str, slot: str, *, top_n: int, out_dir: Path, full_scale
     n_nonzero = int((in_scope_weight[order] > 0).sum())
 
     # --- 1. relevant-cards-only matrix, popularity-ordered ---
+    # Matrix-scale guardrail (plan §7 task 5.7): n_nonzero scales with the corpus (worst case,
+    # the global scope, close to the full card pool) -- unlike every matrix cooccurrence.py
+    # itself produces, this plot's whole purpose is a dense pixel grid, so this call is a real
+    # check, not defensive boilerplate. See assert_dense_matrix_safe's own docstring.
+    assert_dense_matrix_safe(n_nonzero, dtype_bytes=matrix.dtype.itemsize)
     dense_full = reordered.toarray()[:n_nonzero, :n_nonzero]
     fig, ax = plt.subplots(figsize=(8, 8))
     vmax = np.abs(dense_full).max() or 1.0

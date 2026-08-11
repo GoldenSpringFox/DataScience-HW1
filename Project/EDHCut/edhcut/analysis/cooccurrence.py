@@ -115,9 +115,40 @@ PRECON_CUT_RATE_FULL_WEIGHT = 0.05
 SMOOTHING_K = 1.0
 MIN_PAIR_COUNT = 3
 
+# Matrix-scale guardrail (plan §7 task 5.7, added once the metagame harvest was expected to grow
+# the card pool from ~4.8k to ~15-22k cards): every matrix this module itself produces stays
+# sparse throughout -- compute_pmi/compute_lift/compute_tscore iterate CooccurrenceResult's
+# pair_weighted dict (O(nnz)), never a dense n x n array, and `top_associated`'s only `.todense()`
+# call is on a single sparse *row* (O(n), not O(n^2)). `build_and_save` itself does not call
+# `assert_dense_matrix_safe` -- confirmed live post-harvest (18,979 cards, 5.9% pair density) that
+# the real PMI/t-score matrices sit at ~63 MiB in memory, ~40x under the naive n^2 estimate, so
+# there is no dense allocation here to guard against. This ceiling exists purely as a tripwire for
+# something *else* (a future addition, a notebook, an ad hoc script) accidentally materializing a
+# dense full-pool matrix and silently thrashing swap instead of failing with a clear error -- see
+# `scripts/plot_matrix_overview.py`'s heatmap for the one real call site that needs it.
+MAX_DENSE_MATRIX_BYTES = 2 * 1024**3
+
 KB_DEV_DIR = CONFIG.paths.kb_dir / "dev"
 
 Pair = tuple[int, int]
+
+
+def assert_dense_matrix_safe(n: int, *, dtype_bytes: int = 8, max_bytes: int = MAX_DENSE_MATRIX_BYTES) -> None:
+    """Raise `MemoryError` if a dense `n x n` array of `dtype_bytes`-byte elements would exceed
+    `max_bytes`. Call this before any code path that might materialize one (`.toarray()`/
+    `.todense()` on a matrix scoped to the *whole* card pool, not a small selected submatrix) --
+    see the `MAX_DENSE_MATRIX_BYTES` comment above for why this exists despite nothing in this
+    module needing a dense matrix today."""
+    needed = n * n * dtype_bytes
+    if needed > max_bytes:
+        raise MemoryError(
+            f"Refusing to materialize a dense {n:,}x{n:,} matrix "
+            f"({needed / 1024**3:.2f} GiB at {dtype_bytes} bytes/element, over the "
+            f"{max_bytes / 1024**3:.2f} GiB limit). This pipeline is sparse-only by design -- "
+            "if you're seeing this, something is about to call .toarray()/.todense() on a "
+            "full-pool matrix. Either avoid the dense conversion, restrict it to a smaller "
+            "submatrix, or raise MIN_DECK_COUNT to shrink the card pool."
+        )
 
 
 def precon_card_weight(cut_rate: float) -> float:
@@ -261,16 +292,29 @@ def _precon_card_weight_overrides(
 
 
 def build_cooccurrence(
-    conn: sqlite3.Connection, card_index: pd.DataFrame, *, slot_key: str | None = None
+    conn: sqlite3.Connection,
+    card_index: pd.DataFrame,
+    *,
+    slot_key: str | None = None,
+    deck_slot_weights: dict[str, float] | None = None,
 ) -> CooccurrenceResult:
     """Weighted (novelty-adjusted) + raw co-occurrence counts over `card_index`'s row universe,
-    scoped to one commander slot's decks (`slot_key`) or every deck (`slot_key=None`, global)."""
+    scoped to one commander slot's decks (`slot_key`) or every deck (`slot_key=None`, global).
+
+    `deck_slot_weights` (`slot_key -> weight`, e.g. `edhcut.analysis.deck_weights.
+    compute_deck_weights`) applies an additional *deck*-level multiplier on top of the existing
+    *card*-level precon-novelty weight -- every card's contribution to a deck's marginal/pair
+    counts is scaled by that deck's own slot weight, and `total_weight` (the null model's `N`)
+    becomes the sum of those weights rather than a plain deck count, so the two stay consistent.
+    A slot missing from the mapping defaults to 1.0 (unresolved -> neutral, same convention
+    `deck_weight()` itself uses). `None` (the default) disables this entirely -- unweighted,
+    unchanged from before this parameter existed."""
     oracle_to_row = dict(zip(card_index["oracle_id"], card_index["row"]))
     row_to_oracle = {row: oracle_id for oracle_id, row in oracle_to_row.items()}
     n = len(card_index)
 
     query = (
-        "SELECT dc.deck_id, dc.oracle_id, dc.qty, d.commander_oracle_id, d.partner_oracle_id "
+        "SELECT dc.deck_id, dc.oracle_id, dc.qty, d.commander_oracle_id, d.partner_oracle_id, d.slot_key "
         "FROM deck_cards dc JOIN decks d ON d.deck_id = dc.deck_id"
     )
     params: tuple = ()
@@ -281,10 +325,12 @@ def build_cooccurrence(
     by_deck: dict[int, set[int]] = {}
     deck_qty: dict[int, dict[str, int]] = {}
     deck_commanders: dict[int, list[str]] = {}
-    for deck_id, oracle_id, qty, commander_oracle_id, partner_oracle_id in conn.execute(query, params):
+    deck_slot_key: dict[int, str] = {}
+    for deck_id, oracle_id, qty, commander_oracle_id, partner_oracle_id, deck_slot in conn.execute(query, params):
         deck_qty.setdefault(deck_id, {})[oracle_id] = qty
         if deck_id not in deck_commanders:
             deck_commanders[deck_id] = [oid for oid in (commander_oracle_id, partner_oracle_id) if oid]
+        deck_slot_key[deck_id] = deck_slot
         row = oracle_to_row.get(oracle_id)
         if row is None:
             continue  # below the pool's min-deck-count threshold, not part of this index
@@ -296,16 +342,19 @@ def build_cooccurrence(
     pair_weighted: Counter = Counter()
     raw_marginal = np.zeros(n, dtype=np.int64)
     weighted_marginal = np.zeros(n, dtype=np.float64)
+    total_weight = 0.0
 
     for deck_id, rows in by_deck.items():
+        deck_w = deck_slot_weights.get(deck_slot_key[deck_id], 1.0) if deck_slot_weights is not None else 1.0
+        total_weight += deck_w
         overrides = weight_overrides.get(deck_id, {})
         card_weight = {r: overrides.get(row_to_oracle[r], 1.0) for r in rows}
         for r in rows:
             raw_marginal[r] += 1
-            weighted_marginal[r] += card_weight[r]
+            weighted_marginal[r] += card_weight[r] * deck_w
         for i, j in combinations(sorted(rows), 2):
             pair_raw[(i, j)] += 1
-            pair_weighted[(i, j)] += card_weight[i] * card_weight[j]
+            pair_weighted[(i, j)] += card_weight[i] * card_weight[j] * deck_w
 
     return CooccurrenceResult(
         n_cards=n,
@@ -313,7 +362,7 @@ def build_cooccurrence(
         pair_weighted=dict(pair_weighted),
         raw_marginal=raw_marginal,
         weighted_marginal=weighted_marginal,
-        total_weight=float(len(by_deck)),
+        total_weight=total_weight,
         deck_count=len(by_deck),
     )
 
@@ -497,6 +546,7 @@ def build_and_save(
         "precon_diff_full_trust_ceiling": PRECON_DIFF_FULL_TRUST_CEILING,
         "smoothing_k": SMOOTHING_K,
         "min_pair_count": MIN_PAIR_COUNT,
+        "max_dense_matrix_bytes": MAX_DENSE_MATRIX_BYTES,
         "n_cards": len(card_index),
         "slot_labels": slot_labels,
         "scopes": [

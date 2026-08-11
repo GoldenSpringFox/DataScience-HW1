@@ -7,6 +7,7 @@ from edhcut.analysis.cooccurrence import (
     PRECON_CUT_RATE_FULL_WEIGHT,
     CooccurrenceResult,
     _slot_label,
+    assert_dense_matrix_safe,
     build_card_index,
     build_cooccurrence,
     compute_lift,
@@ -163,6 +164,45 @@ def test_build_cooccurrence_scoped_to_slot_key(db) -> None:
 
     result = build_cooccurrence(db, index, slot_key="slot-a")
     assert result.deck_count == 1
+
+
+def test_build_cooccurrence_deck_slot_weights_scale_marginal_and_pair_contributions(db) -> None:
+    _insert_deck(db, 1, slot_key="heavy", cards=["a", "b"])
+    _insert_deck(db, 2, slot_key="light", cards=["a", "b"])
+    index = build_card_index(db, min_decks=1)
+    row = dict(zip(index["oracle_id"], index["row"]))
+    pair = tuple(sorted((row["a"], row["b"])))
+
+    result = build_cooccurrence(db, index, slot_key=None, deck_slot_weights={"heavy": 0.25, "light": 3.0})
+
+    assert result.weighted_marginal[row["a"]] == pytest.approx(0.25 + 3.0)
+    assert result.pair_weighted[pair] == pytest.approx(0.25 + 3.0)
+    assert result.pair_raw[pair] == 2  # raw counts stay unweighted
+    assert result.deck_count == 2  # raw deck count stays unweighted
+    assert result.total_weight == pytest.approx(0.25 + 3.0)  # N follows the weighted sample size
+
+
+def test_build_cooccurrence_deck_slot_weights_missing_slot_defaults_to_neutral(db) -> None:
+    _insert_deck(db, 1, slot_key="known", cards=["a", "b"])
+    _insert_deck(db, 2, slot_key="unmapped", cards=["a", "b"])
+    index = build_card_index(db, min_decks=1)
+    row = dict(zip(index["oracle_id"], index["row"]))
+    pair = tuple(sorted((row["a"], row["b"])))
+
+    result = build_cooccurrence(db, index, slot_key=None, deck_slot_weights={"known": 0.5})
+
+    assert result.pair_weighted[pair] == pytest.approx(0.5 + 1.0)  # "unmapped" falls back to 1.0
+    assert result.total_weight == pytest.approx(1.5)
+
+
+def test_build_cooccurrence_no_deck_slot_weights_matches_unweighted_default(db) -> None:
+    _insert_deck(db, 1, slot_key="s", cards=["a", "b"])
+    index = build_card_index(db, min_decks=1)
+
+    unweighted = build_cooccurrence(db, index, slot_key=None)
+    explicit_none = build_cooccurrence(db, index, slot_key=None, deck_slot_weights=None)
+
+    assert unweighted.total_weight == explicit_none.total_weight == pytest.approx(1.0)
 
 
 def test_build_cooccurrence_weighs_down_only_frequently_cut_precon_cards(db) -> None:
@@ -489,3 +529,31 @@ def test_top_associated_land_query_still_finds_other_lands(db) -> None:
     plains_id = index.loc[index["name"] == "plains", "oracle_id"].iloc[0]
     top = top_associated(pmi, index, plains_id, k=5)
     assert list(top["name"]) == ["island"]
+
+
+# --- assert_dense_matrix_safe ------------------------------------------------------------------
+
+def test_assert_dense_matrix_safe_passes_under_the_limit() -> None:
+    assert_dense_matrix_safe(1000, max_bytes=1_000_000_000)  # 1000^2 * 8 = 8MB, well under 1GB
+
+
+def test_assert_dense_matrix_safe_raises_over_the_limit() -> None:
+    with pytest.raises(MemoryError, match=r"20,000x20,000"):
+        assert_dense_matrix_safe(20_000, dtype_bytes=8, max_bytes=1024**3)  # 20k^2*8 = 3.2GB > 1GB
+
+
+def test_assert_dense_matrix_safe_respects_dtype_bytes() -> None:
+    n = 17_000
+    limit = 1024**3  # 1 GiB = 1,073,741,824 bytes
+    # float32 (4 bytes): 17000^2*4 = 1,156,000,000 -- over the 1 GiB limit
+    with pytest.raises(MemoryError):
+        assert_dense_matrix_safe(n, dtype_bytes=4, max_bytes=limit)
+    # float16 (2 bytes) for the same n: 17000^2*2 = 578,000,000 -- under the same limit
+    assert_dense_matrix_safe(n, dtype_bytes=2, max_bytes=limit)
+
+
+def test_assert_dense_matrix_safe_default_ceiling_covers_todays_real_pool() -> None:
+    # Regression guard: today's real card_index (~4.8k cards as of 2026-08-09) must never trip
+    # the default ceiling -- this pins that expectation so a future default-ceiling change that
+    # would break the real pipeline fails a test, not a live build.
+    assert_dense_matrix_safe(4_798)

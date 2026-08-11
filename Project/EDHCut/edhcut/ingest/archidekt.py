@@ -304,7 +304,20 @@ def _upsert_deck(
     commander_oracle_id: str,
     partner_oracle_id: str | None,
     slot_key: str,
+    cohort: str,
 ) -> int:
+    """Upsert by `(source, source_id)`. **Roster rows are never downgraded**: the `WHERE
+    decks.cohort != 'roster'` guard on the conflict update means a deck already recorded under
+    the full-resolution roster cohort keeps that cohort/slot_key even if a later meta-sample
+    harvest (task 5.7) independently re-surfaces the same Archidekt deck under a different
+    commander search -- a real, not just theoretical, collision path: several meta-sample
+    commanders are the *other* half of an existing roster partner pair (e.g. Yoshimaru pairs
+    with commanders besides Bruse Tarl in the wild), so their searches can legitimately
+    re-encounter a deck the roster harvest already has. Known minor imprecision this trades for:
+    such a deck still counts toward that meta-sample commander's `decks_kept` stopping
+    condition even though it doesn't add a new *meta_sample*-cohort row -- acceptable (off by at
+    most a couple of decks for a handful of commanders) rather than adding per-candidate cohort
+    lookups to avoid it."""
     source = "archidekt"
     source_id = str(deck["id"])
     url = deck_url(deck["id"])
@@ -312,17 +325,19 @@ def _upsert_deck(
     conn.execute(
         """
         INSERT INTO decks (
-            source, source_id, url, commander_oracle_id, partner_oracle_id, slot_key,
+            source, source_id, url, commander_oracle_id, partner_oracle_id, slot_key, cohort,
             fetched_at, views, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source, source_id) DO UPDATE SET
             url = excluded.url,
             commander_oracle_id = excluded.commander_oracle_id,
             partner_oracle_id = excluded.partner_oracle_id,
             slot_key = excluded.slot_key,
+            cohort = excluded.cohort,
             fetched_at = excluded.fetched_at,
             views = excluded.views,
             updated_at = excluded.updated_at
+        WHERE decks.cohort != 'roster'
         """,
         (
             source,
@@ -331,6 +346,7 @@ def _upsert_deck(
             commander_oracle_id,
             partner_oracle_id,
             slot_key,
+            cohort,
             fetched_at,
             deck.get("viewCount"),
             deck.get("updatedAt"),
@@ -415,6 +431,7 @@ def _harvest_pass(
     required_ids: set[str],
     searched_oracle_id: str,
     slot_key: str,
+    cohort: str,
     known_oracle_ids: set[str],
     stale_cutoff: datetime,
     stop_at_total: int,
@@ -519,7 +536,7 @@ def _harvest_pass(
         others = [oid for oid in deck_commander_ids if oid != searched_oracle_id]
         stats.decks_kept += 1
         deck_pk = _upsert_deck(
-            conn, deck, searched_oracle_id, others[0] if others else None, slot_key
+            conn, deck, searched_oracle_id, others[0] if others else None, slot_key, cohort
         )
         rows_written = _write_deck_cards(conn, deck_pk, result.quantities)
         stats.cards_written += rows_written
@@ -552,10 +569,13 @@ def harvest_slot(
     *,
     decks_per_commander: int,
     staleness_cutoff_days: int,
+    order_by: str = "-viewCount",
+    cohort: str = "roster",
+    already_seen_source_ids: frozenset[str] = frozenset(),
     show_progress: bool = True,
     log_file: TextIO | None = None,
 ) -> SlotHarvestStats:
-    """Harvest one configured commander slot up to `decks_per_commander` decks.
+    """Harvest one configured commander slot up to `decks_per_commander` *additional* decks.
 
     Single-commander slots run a single search. **Partner slots** run up to three passes,
     because Archidekt rarely has enough decks running an exact partner pair (Yoshimaru +
@@ -573,6 +593,15 @@ def harvest_slot(
 
     Fallback decks are stored with their real commanders; `decks.slot_key` is what groups
     them into this slot's corpus.
+
+    `order_by`/`cohort` (task 5.7): the meta-sample harvest passes `order_by="-updatedAt"`
+    (verified live to both avoid `-viewCount`'s netdecked-famous-deck bias and have a *higher*
+    keep rate — see `EDHCut_PLAN.md` task 5.7) and `cohort="meta_sample"`, vs. the roster
+    harvest's defaults. `already_seen_source_ids` seeds `seen_source_ids` up front — pass the
+    `source_id`s of decks this slot already has (for this cohort) to make `decks_per_commander`
+    mean "how many *more* decks are needed," not "how many total," and so a resumed run doesn't
+    re-fetch (network cost) or re-count (stopping-condition cost) decks it already kept. This is
+    what makes an interrupted meta-sample harvest resumable by just re-running the same command.
     """
     primary, *rest = commander_names
     other_partner = rest[0] if rest else None
@@ -585,7 +614,7 @@ def harvest_slot(
     required_ids = set(slot_oracle_ids)
 
     stale_cutoff = datetime.now(timezone.utc) - timedelta(days=staleness_cutoff_days)
-    seen_source_ids: set[str] = set()
+    seen_source_ids: set[str] = set(already_seen_source_ids)
 
     pbar = tqdm(
         total=decks_per_commander,
@@ -596,10 +625,11 @@ def harvest_slot(
     try:
         _harvest_pass(
             conn, session,
-            search_deck_listings(session, primary, other_partner),
+            search_deck_listings(session, primary, other_partner, order_by=order_by),
             required_ids=required_ids,
             searched_oracle_id=expected_oracle_ids[primary],
             slot_key=slot_key,
+            cohort=cohort,
             known_oracle_ids=known_oracle_ids,
             stale_cutoff=stale_cutoff,
             stop_at_total=decks_per_commander,
@@ -628,10 +658,11 @@ def harvest_slot(
                     break
                 _harvest_pass(
                     conn, session,
-                    search_deck_listings(session, partner_name, colors=colors),
+                    search_deck_listings(session, partner_name, colors=colors, order_by=order_by),
                     required_ids={expected_oracle_ids[partner_name]},
                     searched_oracle_id=expected_oracle_ids[partner_name],
                     slot_key=slot_key,
+                    cohort=cohort,
                     known_oracle_ids=known_oracle_ids,
                     stale_cutoff=stale_cutoff,
                     stop_at_total=stop_at_total,
@@ -719,6 +750,169 @@ def run(
             log_file.close()
 
 
+def _commander_names_for(conn: sqlite3.Connection, commander_oracle_id: str, partner_oracle_id: str | None) -> list[str]:
+    oracle_ids = [commander_oracle_id] + ([partner_oracle_id] if partner_oracle_id else [])
+    placeholders = ",".join("?" * len(oracle_ids))
+    by_id = dict(conn.execute(f"SELECT oracle_id, name FROM cards WHERE oracle_id IN ({placeholders})", oracle_ids))
+    return [by_id[oid] for oid in oracle_ids]
+
+
+@dataclass
+class MetaSampleCommanderStats:
+    slot_key: str
+    name: str
+    sample_target: int
+    already_kept: int
+    harvest: SlotHarvestStats | None  # None if skipped -- already at target before this run
+
+    @property
+    def total_kept(self) -> int:
+        return self.already_kept + (self.harvest.decks_kept if self.harvest else 0)
+
+    @property
+    def shortfall(self) -> int:
+        return max(0, self.sample_target - self.total_kept)
+
+
+def run_meta_sample(
+    conn: sqlite3.Connection,
+    session: RateLimitedSession | None = None,
+    *,
+    order_by: str = "-updatedAt",
+    limit: int | None = None,
+    show_progress: bool = True,
+    log_path: Path | None = None,
+) -> list[MetaSampleCommanderStats]:
+    """Harvest decks for every `meta_commanders` row (task 5.7's broad metagame sample) up to
+    each one's own `sample_target`. Distinct from, and never overwrites, the 5-slot roster
+    harvest `run()` performs -- see `_upsert_deck`'s cohort-priority guard.
+
+    **Built to survive an unattended multi-hour run** across ~1,000 commanders:
+    - *Per-commander error isolation*: `harvest_slot` already catches its own exceptions into
+      `stats.error` rather than raising (existing behavior) -- unlike `run()`, this loop does
+      NOT break on a commander's error; it records it and moves to the next commander. ~1,000
+      commanders means an occasional bad one (deleted deck, transient page-shape hiccup) is
+      expected, not exceptional.
+    - *Resumability*: before harvesting each commander, checks how many `cohort='meta_sample'`
+      decks it already has for that `slot_key` and only asks `harvest_slot` for the remainder
+      (via `already_seen_source_ids`) -- interrupting this run and re-invoking the same command
+      later picks up where it left off, commander by commander, without re-fetching or
+      double-counting anything already kept.
+    - *Retry with backoff*: inherited for free from `edhcut.http.request_with_retry` (tenacity,
+      5 attempts, exponential backoff), already used by every request this makes.
+    - *Commit checkpointing*: inherited for free from `_write_deck_cards`, which commits after
+      every single kept deck, not batched per commander.
+
+    `order_by` defaults to `-updatedAt`, not the roster harvest's `-viewCount` default --
+    verified live to both avoid `-viewCount`'s netdecked-famous-deck bias at this much smaller
+    per-commander scale and have a *higher* keep rate (68% vs. 53%, see `EDHCut_PLAN.md` task
+    5.7). `limit`, if given, stops after this many commanders (by `edhrec_rank` ascending, i.e.
+    most-played first) -- for a bounded test run before committing to the full multi-hour one.
+
+    **Roster commanders are skipped entirely, not harvested a second time under a different
+    cohort.** Several roster commanders clear the meta-sample threshold and so have their own
+    `meta_commanders` row (Krenko, Kyler, Yenna as of the 2026-08-09 pool) -- per
+    `EDHCut_PLAN.md` task 5.7's explicit design, they keep their existing (much larger) roster
+    corpus at full resolution rather than accumulating a redundant `meta_sample`-cohort corpus
+    alongside it; `compute_deck_weights` (`edhcut.analysis.deck_weights`) already counts their
+    full roster deck count as the "sample" when computing design weights, so no meta-sample
+    decks are needed to place them in the weighting scheme.
+    """
+    session = session or get_session("archidekt")
+    known_oracle_ids = {row[0] for row in conn.execute("SELECT oracle_id FROM cards")}
+    roster_slot_keys = {
+        slot_key_for([_resolve_local_oracle_id(conn, name) for name in names])
+        for names in CONFIG.commander_slots
+    }
+
+    rows = [
+        row for row in conn.execute(
+            "SELECT slot_key, commander_oracle_id, partner_oracle_id, name, sample_target "
+            "FROM meta_commanders ORDER BY edhrec_rank"
+        )
+        if row[0] not in roster_slot_keys
+    ]
+    if limit is not None:
+        rows = rows[:limit]
+
+    log_file = None
+    if log_path is not None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_file = open(log_path, "a", encoding="utf-8")
+
+    results: list[MetaSampleCommanderStats] = []
+    try:
+        for slot_key, commander_oracle_id, partner_oracle_id, name, sample_target in tqdm(
+            rows, desc="meta_sample", unit="commander", disable=not show_progress
+        ):
+            already_seen = frozenset(
+                row[0] for row in conn.execute(
+                    "SELECT source_id FROM decks WHERE slot_key = ? AND cohort = 'meta_sample'", (slot_key,)
+                )
+            )
+            already_kept = len(already_seen)
+            if already_kept >= sample_target:
+                results.append(MetaSampleCommanderStats(
+                    slot_key=slot_key, name=name, sample_target=sample_target,
+                    already_kept=already_kept, harvest=None,
+                ))
+                continue
+
+            commander_names = _commander_names_for(conn, commander_oracle_id, partner_oracle_id)
+            harvest = harvest_slot(
+                conn, session, commander_names, known_oracle_ids,
+                decks_per_commander=sample_target - already_kept,
+                staleness_cutoff_days=CONFIG.deck_staleness_cutoff_days,
+                order_by=order_by,
+                cohort="meta_sample",
+                already_seen_source_ids=already_seen,
+                show_progress=False,  # one tqdm bar for the whole run, not one per commander
+                log_file=log_file,
+            )
+            _write_ingest_log(conn, harvest)
+            results.append(MetaSampleCommanderStats(
+                slot_key=slot_key, name=name, sample_target=sample_target,
+                already_kept=already_kept, harvest=harvest,
+            ))
+            # No `if harvest.error: break` here -- deliberate, see docstring.
+    finally:
+        if log_file is not None:
+            log_file.close()
+
+    return results
+
+
+def _print_meta_sample_summary(results: list[MetaSampleCommanderStats]) -> None:
+    already_done = sum(1 for r in results if r.harvest is None)
+    errored = [r for r in results if r.harvest is not None and r.harvest.error]
+    shortfalls = [r for r in results if r.shortfall > 0]
+    total_kept = sum(r.total_kept for r in results)
+    total_target = sum(r.sample_target for r in results)
+
+    print(
+        f"meta_sample: {len(results)} commanders processed, {total_kept:,}/{total_target:,} "
+        f"decks kept ({already_done} already complete from a prior run)"
+    )
+    if errored:
+        print(f"  {len(errored)} commander(s) hit an error mid-harvest (progress before the "
+              f"error is saved; re-run to retry — resumability skips what's already done):")
+        for r in errored[:20]:
+            print(f"    {r.name}: {r.harvest.error}")
+        if len(errored) > 20:
+            print(f"    ... and {len(errored) - 20} more")
+    if shortfalls:
+        under_target_not_errored = [r for r in shortfalls if r not in errored]
+        if under_target_not_errored:
+            print(f"  {len(under_target_not_errored)} commander(s) fell short of target with no "
+                  f"error (Archidekt simply didn't have enough valid decks):")
+            for r in under_target_not_errored[:20]:
+                print(f"    {r.name}: {r.total_kept}/{r.sample_target}")
+            if len(under_target_not_errored) > 20:
+                print(f"    ... and {len(under_target_not_errored) - 20} more")
+    if not errored and not shortfalls:
+        print("  Every commander reached its full sample_target.")
+
+
 def _print_summary(stats: SlotHarvestStats) -> None:
     print(
         f"{stats.slot_label}: kept {stats.decks_kept} decks "
@@ -769,10 +963,34 @@ def main() -> None:
              "checked (not just kept ones) — appended to, so it accumulates across runs. "
              "Pass an empty string to disable.",
     )
+    parser.add_argument(
+        "--meta-sample", action="store_true",
+        help="Harvest task 5.7's broad metagame sample (every edhcut.ingest.edhrec_commanders "
+             "row, up to its own sample_target) instead of the 5-slot roster. Resumable: "
+             "interrupting and re-running this same command picks up where it left off.",
+    )
+    parser.add_argument(
+        "--meta-sample-limit", type=int, default=None,
+        help="With --meta-sample: only process this many commanders (most-played first) — for "
+             "a bounded test run before committing to the full multi-hour harvest.",
+    )
     args = parser.parse_args()
 
-    slots = CONFIG.commander_slots if args.slot is None else [CONFIG.commander_slots[args.slot]]
     log_path = args.log_file if str(args.log_file) else None
+
+    if args.meta_sample:
+        with connect(CONFIG.paths.db_path) as conn:
+            results = run_meta_sample(
+                conn, limit=args.meta_sample_limit,
+                show_progress=not args.no_progress, log_path=log_path,
+            )
+        print()
+        _print_meta_sample_summary(results)
+        if log_path is not None:
+            print(f"\nPer-deck audit log: {log_path}")
+        return
+
+    slots = CONFIG.commander_slots if args.slot is None else [CONFIG.commander_slots[args.slot]]
 
     with connect(CONFIG.paths.db_path) as conn:
         all_stats = run(
