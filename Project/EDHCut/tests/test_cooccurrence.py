@@ -1,6 +1,7 @@
 import math
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from edhcut.analysis.cooccurrence import (
@@ -8,8 +9,10 @@ from edhcut.analysis.cooccurrence import (
     CooccurrenceResult,
     _slot_label,
     assert_dense_matrix_safe,
+    build_card_color_identities,
     build_card_index,
     build_cooccurrence,
+    compute_color_conditioned_tscore,
     compute_lift,
     compute_pmi,
     compute_tscore,
@@ -460,6 +463,88 @@ def test_tscore_favors_well_supported_pair_over_low_count_coincidence_with_no_di
     )
     tscore = compute_tscore(result, min_pair_count=1)
     assert tscore[(0, 2)] > tscore[(0, 1)]
+
+
+# --- build_card_color_identities --------------------------------------------------------------
+
+def test_build_card_color_identities_canonicalizes_and_preserves_row_order(db) -> None:
+    db.execute("INSERT INTO cards (oracle_id, name, color_identity) VALUES ('a', 'A', '[\"G\", \"W\"]')")
+    db.execute("INSERT INTO cards (oracle_id, name, color_identity) VALUES ('b', 'B', '[]')")
+    db.commit()
+    card_index = pd.DataFrame({"oracle_id": ["a", "b"], "name": ["A", "B"], "row": [0, 1]})
+
+    identities = build_card_color_identities(db, card_index)
+
+    assert identities == ["WG", ""]
+
+
+# --- compute_color_conditioned_tscore -----------------------------------------------------------
+
+def test_color_conditioned_tscore_matches_pooled_when_a_card_is_colorless() -> None:
+    # Self-validating property documented in compute_color_conditioned_tscore's own docstring:
+    # a colorless card is eligible in every deck, so N_ij collapses to the other card's own
+    # eligible count and the formula reduces algebraically to the pooled expected value --
+    # requires total_weight == eligible_deck_count("") for the identity to hold, which is always
+    # true in the real pipeline (color_identity_deck_counts is built from the same deck
+    # population CooccurrenceResult itself was).
+    result = CooccurrenceResult(
+        n_cards=2,
+        pair_raw={(0, 1): 8},
+        pair_weighted={(0, 1): 8.0},
+        raw_marginal=np.array([50, 10]),
+        weighted_marginal=np.array([50.0, 10.0]),
+        total_weight=100.0,
+        deck_count=100,
+    )
+    card_identities = ["", "G"]
+    color_identity_deck_counts = pd.DataFrame({"color_identity": ["", "G"], "deck_count": [70, 30]})
+
+    t_pool = compute_tscore(result, min_pair_count=1)
+    t_color = compute_color_conditioned_tscore(result, card_identities, color_identity_deck_counts, min_pair_count=1)
+
+    assert t_color[(0, 1)] == pytest.approx(t_pool[(0, 1)])
+
+
+def test_color_conditioned_tscore_deflates_generic_same_color_pair() -> None:
+    # Two cards that co-occur in literally every one of a handful of white decks -- "always
+    # bundled together within their own eligible color," the exact pattern found live (Swords to
+    # Plowshares + Felidar Retreat: pooled t=8.18, color-conditioned t=0.63, -92%). The pooled
+    # score is inflated by a much larger pool of decks that could never run either card anyway.
+    result = CooccurrenceResult(
+        n_cards=2,
+        pair_raw={(0, 1): 5},
+        pair_weighted={(0, 1): 5.0},
+        raw_marginal=np.array([5, 5]),
+        weighted_marginal=np.array([5.0, 5.0]),
+        total_weight=50.0,  # 5 white decks + 45 decks of other colors entirely
+        deck_count=50,
+    )
+    card_identities = ["W", "W"]
+    color_identity_deck_counts = pd.DataFrame({"color_identity": ["W", "U"], "deck_count": [5, 45]})
+
+    t_pool = compute_tscore(result, min_pair_count=1)
+    t_color = compute_color_conditioned_tscore(result, card_identities, color_identity_deck_counts, min_pair_count=1)
+
+    assert t_pool[(0, 1)] > 1.0  # pooled reads this as a real association
+    assert t_color[(0, 1)] == pytest.approx(0.0, abs=1e-9)  # color-conditioned: no surprise at all
+    assert t_color[(0, 1)] < t_pool[(0, 1)]
+
+
+def test_color_conditioned_tscore_respects_min_pair_count() -> None:
+    result = CooccurrenceResult(
+        n_cards=2,
+        pair_raw={(0, 1): 2},
+        pair_weighted={(0, 1): 2.0},
+        raw_marginal=np.array([5, 5]),
+        weighted_marginal=np.array([5.0, 5.0]),
+        total_weight=50.0,
+        deck_count=50,
+    )
+    card_identities = ["W", "W"]
+    color_identity_deck_counts = pd.DataFrame({"color_identity": ["W"], "deck_count": [5]})
+
+    t_color = compute_color_conditioned_tscore(result, card_identities, color_identity_deck_counts, min_pair_count=3)
+    assert t_color[(0, 1)] == 0.0  # masked, same MIN_PAIR_COUNT floor compute_tscore itself uses
 
 
 # --- top_associated ------------------------------------------------------------------------

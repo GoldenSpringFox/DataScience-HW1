@@ -172,6 +172,8 @@ def build_card_row(card: dict) -> dict[str, Any]:
         "produced_mana": json.dumps(card.get("produced_mana") or []),
         "is_land": "Land" in type_line,
         "image_uri": _image_uri(card),
+        "set_code": card.get("set"),
+        "collector_number": card.get("collector_number"),
     }
 
 
@@ -182,12 +184,12 @@ def _write_cards(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> None:
             oracle_id, name, mana_cost, cmc, type_line, oracle_text, colors,
             color_identity, power, toughness, keywords, rarity, edhrec_rank, price_usd,
             game_changer, legal_commander, can_be_commander, layout, produced_mana, is_land,
-            image_uri
+            image_uri, set_code, collector_number
         ) VALUES (
             :oracle_id, :name, :mana_cost, :cmc, :type_line, :oracle_text, :colors,
             :color_identity, :power, :toughness, :keywords, :rarity, :edhrec_rank, :price_usd,
             :game_changer, :legal_commander, :can_be_commander, :layout, :produced_mana,
-            :is_land, :image_uri
+            :is_land, :image_uri, :set_code, :collector_number
         )
         ON CONFLICT(oracle_id) DO UPDATE SET
             name=excluded.name, mana_cost=excluded.mana_cost, cmc=excluded.cmc,
@@ -199,7 +201,8 @@ def _write_cards(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> None:
             game_changer=excluded.game_changer, legal_commander=excluded.legal_commander,
             can_be_commander=excluded.can_be_commander, layout=excluded.layout,
             produced_mana=excluded.produced_mana, is_land=excluded.is_land,
-            image_uri=excluded.image_uri
+            image_uri=excluded.image_uri, set_code=excluded.set_code,
+            collector_number=excluded.collector_number
         """,
         rows,
     )

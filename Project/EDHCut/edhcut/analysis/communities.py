@@ -98,24 +98,28 @@ def basic_land_mask(conn, card_index: pd.DataFrame) -> np.ndarray:
     return card_index["oracle_id"].isin(basic_ids).to_numpy()
 
 
-def build_graph(
-    tscore: sparse.csr_matrix,
+def sparsify_top_k_union(
+    matrix: sparse.csr_matrix,
     *,
     top_k: int = TOP_K,
     min_tscore: float = MIN_TSCORE,
     exclude: np.ndarray | None = None,
-) -> tuple[ig.Graph, np.ndarray]:
-    """Weighted undirected graph over `tscore`'s row universe: each card's `top_k` strongest
-    positive-t-score edges, union-symmetrized. `exclude` (boolean, length `tscore.shape[0]`) zeroes
-    out those rows/columns entirely first -- used for the basic-land exclusion (see module
-    docstring); they can't be a node themselves, nor count toward any other card's top-k. Returns
-    the graph plus a boolean mask (length `tscore.shape[0]`) of which rows ended up with at least
-    one edge -- see module docstring for why zero-degree rows (excluded, or just never strongly
-    positively connected to anything) are dropped rather than kept as isolated nodes. The graph's
-    vertex `i` corresponds to original row `np.flatnonzero(mask)[i]`, also stored as the
-    `orig_row` vertex attribute for convenience."""
-    n = tscore.shape[0]
-    mat = tscore.tocsr(copy=True)
+) -> tuple[sparse.csr_matrix, np.ndarray]:
+    """The top-K union-symmetrized sparsification described in this module's own docstring,
+    factored out of `build_graph` so `edhcut.analysis.symnmf_packages` can reuse the identical
+    rule for its own factorization input rather than re-deriving it (a symmetric NMF `S` matrix
+    needs exactly this sparsification, not an `igraph.Graph`).
+
+    Each row's `top_k` strongest positive entries survive; an entry survives into the result if
+    *either* endpoint kept it ("union"). `exclude` (boolean, length `matrix.shape[0]`) zeroes out
+    those rows/columns entirely first -- they can't be a node themselves, nor count toward any
+    other row's top-k. Rows left with zero surviving entries are dropped from the result
+    entirely, not kept as all-zero rows (see module docstring for why). Returns the sparsified
+    matrix restricted to surviving rows/cols (shape `(has_edge.sum(), has_edge.sum())`) plus a
+    boolean mask (length `matrix.shape[0]`) of which original rows survived -- row `i` of the
+    returned matrix corresponds to original row `np.flatnonzero(has_edge)[i]`."""
+    n = matrix.shape[0]
+    mat = matrix.tocsr(copy=True)
     mat.data[mat.data <= min_tscore] = 0.0
     mat.eliminate_zeros()
 
@@ -146,7 +150,25 @@ def build_graph(
     degree = np.asarray((weighted != 0).sum(axis=1)).ravel()
     has_edge = degree > 0
 
-    sub = weighted[has_edge][:, has_edge].tocoo()
+    sub = weighted[has_edge][:, has_edge].tocsr()
+    return sub, has_edge
+
+
+def build_graph(
+    tscore: sparse.csr_matrix,
+    *,
+    top_k: int = TOP_K,
+    min_tscore: float = MIN_TSCORE,
+    exclude: np.ndarray | None = None,
+) -> tuple[ig.Graph, np.ndarray]:
+    """Weighted undirected graph over `tscore`'s row universe: each card's `top_k` strongest
+    positive-t-score edges, union-symmetrized (`sparsify_top_k_union`, see its own docstring and
+    this module's for the exclusion/zero-degree-dropping rules). Returns the graph plus a
+    boolean mask (length `tscore.shape[0]`) of which rows ended up with at least one edge. The
+    graph's vertex `i` corresponds to original row `np.flatnonzero(mask)[i]`, also stored as the
+    `orig_row` vertex attribute for convenience."""
+    sub, has_edge = sparsify_top_k_union(tscore, top_k=top_k, min_tscore=min_tscore, exclude=exclude)
+    sub = sub.tocoo()
     upper = sub.row < sub.col
     edges = list(zip(sub.row[upper].tolist(), sub.col[upper].tolist()))
     weights = sub.data[upper].tolist()

@@ -31,11 +31,11 @@ def _insert_card(conn, oracle_id, *, name=None, color_identity=(), legal_command
     )
 
 
-def _insert_deck(conn, deck_id, *, commander_oracle_id, partner_oracle_id=None, cards=()) -> None:
+def _insert_deck(conn, deck_id, *, commander_oracle_id, partner_oracle_id=None, slot_key=None, cards=()) -> None:
     conn.execute(
-        "INSERT INTO decks (deck_id, source, source_id, commander_oracle_id, partner_oracle_id) "
-        "VALUES (?, 'archidekt', ?, ?, ?)",
-        (deck_id, f"d{deck_id}", commander_oracle_id, partner_oracle_id),
+        "INSERT INTO decks (deck_id, source, source_id, commander_oracle_id, partner_oracle_id, slot_key) "
+        "VALUES (?, 'archidekt', ?, ?, ?, ?)",
+        (deck_id, f"d{deck_id}", commander_oracle_id, partner_oracle_id, slot_key),
     )
     conn.executemany(
         "INSERT INTO deck_cards (deck_id, oracle_id, qty) VALUES (?, ?, 1)",
@@ -105,6 +105,115 @@ def test_color_identity_deck_counts_groups_matching_identities(db) -> None:
     assert df.set_index("color_identity").loc["R", "deck_count"] == 2
 
 
+def test_deck_color_identities_slot_key_scopes_to_one_slot(db) -> None:
+    _insert_card(db, "krenko", color_identity=["R"])
+    _insert_card(db, "kyler", color_identity=["G", "W"])
+    _insert_deck(db, 1, commander_oracle_id="krenko", slot_key="s-krenko")
+    _insert_deck(db, 2, commander_oracle_id="krenko", slot_key="s-krenko")
+    _insert_deck(db, 3, commander_oracle_id="kyler", slot_key="s-kyler")
+
+    df = build_deck_color_identities(db, slot_key="s-krenko")
+
+    assert set(df["deck_id"]) == {1, 2}
+    assert set(df["color_identity"]) == {"R"}
+
+
+def test_color_identity_deck_counts_slot_key_scopes_to_one_slot(db) -> None:
+    _insert_card(db, "krenko", color_identity=["R"])
+    _insert_card(db, "kyler", color_identity=["G", "W"])
+    _insert_deck(db, 1, commander_oracle_id="krenko", slot_key="s-krenko")
+    _insert_deck(db, 2, commander_oracle_id="kyler", slot_key="s-kyler")
+
+    df = build_color_identity_deck_counts(db, slot_key="s-krenko")
+
+    assert df.set_index("color_identity").loc["R", "deck_count"] == 1
+    assert df.set_index("color_identity").loc["WG", "deck_count"] == 0  # excluded, different slot
+
+
+def test_color_identity_deck_counts_no_slot_key_covers_every_deck(db) -> None:
+    _insert_card(db, "krenko", color_identity=["R"])
+    _insert_card(db, "kyler", color_identity=["G", "W"])
+    _insert_deck(db, 1, commander_oracle_id="krenko", slot_key="s-krenko")
+    _insert_deck(db, 2, commander_oracle_id="kyler", slot_key="s-kyler")
+
+    df = build_color_identity_deck_counts(db)
+
+    assert df.set_index("color_identity").loc["R", "deck_count"] == 1
+    assert df.set_index("color_identity").loc["WG", "deck_count"] == 1
+
+
+def test_deck_color_identities_carries_each_decks_own_slot_key(db) -> None:
+    _insert_card(db, "krenko", color_identity=["R"])
+    _insert_deck(db, 1, commander_oracle_id="krenko", slot_key="s-krenko")
+    df = build_deck_color_identities(db)
+    assert df.set_index("deck_id").loc[1, "slot_key"] == "s-krenko"
+
+
+# --- build_color_identity_deck_counts: deck_slot_weights ----------------------------------------
+
+def test_color_identity_deck_counts_no_deck_slot_weights_matches_default(db) -> None:
+    _insert_card(db, "krenko", color_identity=["R"])
+    _insert_deck(db, 1, commander_oracle_id="krenko", slot_key="s-krenko")
+    unweighted = build_color_identity_deck_counts(db)
+    explicit_none = build_color_identity_deck_counts(db, deck_slot_weights=None)
+    pd.testing.assert_frame_equal(unweighted, explicit_none)
+
+
+def test_color_identity_deck_counts_deck_slot_weights_scales_each_decks_contribution(db) -> None:
+    _insert_card(db, "krenko", color_identity=["R"])
+    _insert_deck(db, 1, commander_oracle_id="krenko", slot_key="heavy")
+    _insert_deck(db, 2, commander_oracle_id="krenko", slot_key="light")
+
+    df = build_color_identity_deck_counts(db, deck_slot_weights={"heavy": 0.25, "light": 3.0})
+
+    assert df.set_index("color_identity").loc["R", "deck_count"] == pytest.approx(0.25 + 3.0)
+
+
+def test_color_identity_deck_counts_deck_slot_weights_missing_slot_defaults_to_one(db) -> None:
+    _insert_card(db, "krenko", color_identity=["R"])
+    _insert_deck(db, 1, commander_oracle_id="krenko", slot_key="known")
+    _insert_deck(db, 2, commander_oracle_id="krenko", slot_key="unmapped")
+
+    df = build_color_identity_deck_counts(db, deck_slot_weights={"known": 0.5})
+
+    assert df.set_index("color_identity").loc["R", "deck_count"] == pytest.approx(0.5 + 1.0)
+
+
+def test_color_identity_deck_counts_deck_slot_weights_uniform_one_matches_unweighted_values(db) -> None:
+    _insert_card(db, "krenko", color_identity=["R"])
+    _insert_card(db, "kyler", color_identity=["G", "W"])
+    _insert_deck(db, 1, commander_oracle_id="krenko", slot_key="s-krenko")
+    _insert_deck(db, 2, commander_oracle_id="kyler", slot_key="s-kyler")
+
+    unweighted = build_color_identity_deck_counts(db)
+    weighted = build_color_identity_deck_counts(db, deck_slot_weights={"s-krenko": 1.0, "s-kyler": 1.0})
+
+    pd.testing.assert_series_equal(
+        unweighted["deck_count"].astype(float), weighted["deck_count"], check_names=False
+    )
+
+
+def test_color_identity_deck_counts_matches_build_cooccurrence_total_weight(db) -> None:
+    """Integration check for the units bug the plan flags: summing the weighted 32-row table
+    must land on exactly the same total a `deck_slot_weights`-weighted `build_cooccurrence` call
+    computes for its own null-model `N`, over the same (global) deck population."""
+    from edhcut.analysis.cooccurrence import build_card_index, build_cooccurrence
+
+    _insert_card(db, "krenko", color_identity=["R"])
+    _insert_card(db, "kyler", color_identity=["G", "W"])
+    _insert_card(db, "goblin1", color_identity=["R"])
+    _insert_deck(db, 1, commander_oracle_id="krenko", slot_key="s-krenko", cards=["goblin1"])
+    _insert_deck(db, 2, commander_oracle_id="krenko", slot_key="s-krenko", cards=["goblin1"])
+    _insert_deck(db, 3, commander_oracle_id="kyler", slot_key="s-kyler", cards=["goblin1"])
+
+    weights = {"s-krenko": 0.5, "s-kyler": 4.0}
+    card_index = build_card_index(db, min_decks=1)
+    cooc_result = build_cooccurrence(db, card_index, slot_key=None, deck_slot_weights=weights)
+
+    counts = build_color_identity_deck_counts(db, deck_slot_weights=weights)
+    assert counts["deck_count"].sum() == pytest.approx(cooc_result.total_weight)
+
+
 # --- eligible_deck_count ---------------------------------------------------------------------
 
 def test_eligible_deck_count_sums_supersets_only() -> None:
@@ -118,11 +227,19 @@ def test_eligible_deck_count_sums_supersets_only() -> None:
     # any other identity containing R -- but not in "", "W", which lack R.
     assert eligible_deck_count(counts, "R") == 20 + 7 + 1
     assert eligible_deck_count(counts, "") == 10 + 20 + 5 + 7 + 1
+    assert isinstance(eligible_deck_count(counts, "R"), int)
 
 
 def test_eligible_deck_count_zero_when_no_deck_has_a_superset() -> None:
     counts = pd.DataFrame({"color_identity": ["", "R"], "deck_count": [10, 20]})
     assert eligible_deck_count(counts, "G") == 0
+
+
+def test_eligible_deck_count_returns_float_for_weighted_deck_counts() -> None:
+    counts = pd.DataFrame({"color_identity": ["", "R"], "deck_count": [10.5, 20.25]})
+    total = eligible_deck_count(counts, "")
+    assert isinstance(total, float)
+    assert total == pytest.approx(30.75)
 
 
 # --- build_card_play_rates -------------------------------------------------------------------

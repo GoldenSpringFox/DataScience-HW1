@@ -29,6 +29,14 @@ notebooks = [
     "matplotlib>=3.8",
     "ipywidgets>=8.0",
     "anywidget>=0.9",  # plotly>=6's go.FigureWidget requires this (interactive hover widgets)
+    # Task 6.4 (louvain_communities.ipynb): networkx supplies Louvain itself
+    # (`louvain_partitions` yields the whole level hierarchy, which igraph's
+    # `community_multilevel` only exposes via `return_levels`), and ipysigma renders the
+    # interactive 2D card graph -- it takes a networkx graph directly and runs ForceAtlas2 in the
+    # browser on WebGL, which is what makes 18k nodes viewable at all (pyvis/vis.js was the other
+    # candidate and tops out an order of magnitude lower).
+    "networkx>=3.3",
+    "ipysigma>=0.24",
 ]
 # edhcut/analysis/embeddings.py's train_word2vec/word2vec_frame (task 6.2) only. Deliberately
 # NOT a core dependency: gensim's shipped C source uses CPython internals (PyLongObject layout,

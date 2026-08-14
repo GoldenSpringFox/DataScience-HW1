@@ -28,6 +28,8 @@ SOL_RING = {
     "produced_mana": ["C"],
     "games": ["paper", "mtgo"],
     "image_uris": {"normal": "https://cards.scryfall.io/normal/front/a/b/sol-ring.jpg"},
+    "set": "msc",
+    "collector_number": "211",
 }
 
 TRANSFORM_CARD = {
@@ -83,6 +85,8 @@ def test_build_card_row_single_face() -> None:
     assert row["image_uri"] == "https://cards.scryfall.io/normal/front/a/b/sol-ring.jpg"
     assert row["power"] is None
     assert row["toughness"] is None
+    assert row["set_code"] == "msc"
+    assert row["collector_number"] == "211"
 
 
 def test_build_card_row_falls_back_to_face_text_for_multi_face_cards() -> None:

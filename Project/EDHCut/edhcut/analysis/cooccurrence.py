@@ -78,6 +78,19 @@ single fragile 2-card combo), while pure-PMI ranking (ignoring frequency) surfac
 6-10-deck coincidences with 100x+ lift — noise PMI's own discount factor doesn't fully catch
 since it only *shrinks* low-count pairs rather than weighing them against genuinely frequent
 ones on the same scale.
+
+**Color-conditioned t-score** (added 2026-08-12, alongside plain `compute_tscore` — not a
+replacement): `compute_tscore`'s pooled null model treats every deck as equally able to run
+every card, which Commander's own color-identity legality rule makes false — two unrelated
+green staples co-occur *above* the pooled baseline purely because green decks are a shared
+eligible pool, not because of synergy. `compute_color_conditioned_tscore` conditions the null
+model on eligibility instead (mirroring `playrate.py`'s own `eligible_deck_count`), and has a
+useful self-check built in: whenever either card is colorless, the correction reduces
+algebraically to exactly the pooled value (confirmed live to 0.0% change), so it only ever fires
+where there's a real color-restriction gap, never as a blanket dampener. Validated live against
+14 real card pairs before shipping (genuine same-color/cross-color synergy pairs moved 0% to
+-8%; unrelated same-color "generic staple" pairs collapsed 48-92%) — see that function's own
+docstring for the exact numbers and the formula.
 """
 
 from __future__ import annotations
@@ -108,6 +121,7 @@ from edhcut.ingest.precon_retention import (
     best_matching_precon,
     deck_precon_trust,
 )
+from edhcut.analysis.playrate import build_color_identity_deck_counts, canonical_identity, eligible_deck_count
 from edhcut.ingest.scryfall import normalize_name
 
 MIN_DECK_COUNT = 3
@@ -455,6 +469,93 @@ def compute_tscore(
     return _symmetric_sparse(tscore_pairs, result.n_cards, dtype=np.float64)
 
 
+def build_card_color_identities(conn: sqlite3.Connection, card_index: pd.DataFrame) -> list[str]:
+    """`card_index`'s own row-ordered list of canonical WUBRG color identity strings (one per
+    card) -- the input `compute_color_conditioned_tscore` needs to look up each card's own
+    eligible-deck-count."""
+    oracle_ids = tuple(card_index["oracle_id"])
+    placeholders = ",".join("?" * len(oracle_ids))
+    ci_by_oracle_id = dict(
+        conn.execute(f"SELECT oracle_id, color_identity FROM cards WHERE oracle_id IN ({placeholders})", oracle_ids)
+    )
+    return [
+        canonical_identity(json.loads(ci_by_oracle_id.get(oracle_id) or "[]"))
+        for oracle_id in card_index["oracle_id"]
+    ]
+
+
+def compute_color_conditioned_tscore(
+    result: CooccurrenceResult,
+    card_identities: list[str],
+    color_identity_deck_counts: pd.DataFrame,
+    *,
+    min_pair_count: int = MIN_PAIR_COUNT,
+) -> sparse.csr_matrix:
+    """t-score with the null model conditioned on Commander's color-identity legality rule, not
+    just pooled across every deck (see module docstring's pooled `compute_tscore` for the
+    baseline this corrects).
+
+    **The problem this fixes**: `compute_tscore`'s `expected = marginal_i * marginal_j / N`
+    treats every deck as equally able to run every card. False under Commander -- a green card
+    can only appear in green-legal decks. Two unrelated green staples then co-occur *above* the
+    pooled baseline purely because green decks are a shared eligible pool, not because of
+    synergy -- confirmed live (2026-08-12) against real card pairs before this was written:
+    `Swords to Plowshares + Felidar Retreat` (both popular, unrelated white staples) scored a
+    pooled t-score of 8.18 -- looked like a real association -- but dropped 92% to 0.63 (noise)
+    once conditioned; `Wood Elves + Managorger Hydra` (unrelated green ramp/aggro) fell from 1.87
+    to 0.91. Genuine synergy pairs barely moved (`Goblin Warchief + Skirk Prospector`: 35.16 ->
+    29.41, -16%; several Human/Zombie/Dragon typal and combo pairs across colors: 0% to -8%).
+
+    **The formula**, mirroring `playrate.py`'s own `eligible_deck_count` logic:
+    ```
+    N_i   = decks eligible to run card i (color-identity superset of card i's own identity)
+    N_ij  = decks eligible to run BOTH i and j (superset of the UNION of their identities)
+    p_i   = marginal_i / N_i   -- this *is* playrate.py's own play_rate metric
+    expected' = N_ij * p_i * p_j
+    t_color = (joint - expected') / sqrt(joint)
+    ```
+    **Self-validating property, not just an empirical finding**: whenever one card is colorless
+    (no identity restriction, `N_i` = every deck), the formula reduces algebraically to exactly
+    `compute_tscore`'s own pooled expected value -- confirmed live to 0.0% change on every
+    colorless-involving pair tested (`Sol Ring + Arcane Signet`, `Ashnod's Altar + Zulaport
+    Cutthroat`, `Solemn Simulacrum + Eternal Witness`). The correction only ever fires when it
+    has a real color-restriction gap to correct, never as a blanket dampener.
+
+    `color_identity_deck_counts` should come from `playrate.build_color_identity_deck_counts`,
+    scoped with the *same* `slot_key` (or none, for global) that `result` itself was built with
+    -- a per-slot analysis's eligible counts must be scoped to that slot's own decks, not every
+    harvested deck, or `N_ij` would count decks outside the analysis's own population."""
+    marg = result.weighted_marginal
+    n_cards = result.n_cards
+
+    eligible_cache: dict[str, int] = {}
+
+    def eligible(ci: str) -> int:
+        if ci not in eligible_cache:
+            eligible_cache[ci] = eligible_deck_count(color_identity_deck_counts, ci)
+        return eligible_cache[ci]
+
+    card_eligible = np.array([eligible(ci) for ci in card_identities], dtype=np.float64)
+    card_play_rate = np.divide(
+        marg, card_eligible, out=np.zeros_like(marg), where=card_eligible > 0
+    )
+
+    pair_n_ij_cache: dict[frozenset[str], int] = {}
+    tscore_pairs: dict[Pair, float] = {}
+    for pair, joint in result.pair_weighted.items():
+        if result.pair_raw[pair] < min_pair_count or joint <= 0:
+            continue
+        i, j = pair
+        ci_i, ci_j = card_identities[i], card_identities[j]
+        cache_key = frozenset((ci_i, ci_j))
+        if cache_key not in pair_n_ij_cache:
+            pair_n_ij_cache[cache_key] = eligible(canonical_identity(set(ci_i) | set(ci_j)))
+        n_ij = pair_n_ij_cache[cache_key]
+        expected = n_ij * card_play_rate[i] * card_play_rate[j]
+        tscore_pairs[pair] = (joint - expected) / math.sqrt(joint)
+    return _symmetric_sparse(tscore_pairs, n_cards, dtype=np.float64)
+
+
 def _slot_label(commander_names: Iterable[str]) -> str:
     """Filesystem-friendly slug for a slot, e.g. ["Krenko, Mob Boss"] -> "krenko",
     ["Yoshimaru, Ever Faithful", "Bruse Tarl, Boorish Herder"] -> "yoshimaru_bruse_tarl".
@@ -509,10 +610,11 @@ def build_and_save(
 
     card_index = build_card_index(conn, min_decks=min_decks)
     card_index.to_parquet(out_dir / "card_index.parquet", index=False)
+    card_identities = build_card_color_identities(conn, card_index)
 
     stats: list[ScopeStats] = []
 
-    def _save(label: str, result: CooccurrenceResult) -> ScopeStats:
+    def _save(label: str, result: CooccurrenceResult, *, slot_key: str | None) -> ScopeStats:
         sparse.save_npz(out_dir / f"cooccur_{label}.npz", result.weighted_matrix())
         pmi = compute_pmi(result)
         lift = compute_lift(result)
@@ -520,6 +622,13 @@ def build_and_save(
         sparse.save_npz(out_dir / f"pmi_{label}.npz", pmi)
         sparse.save_npz(out_dir / f"lift_{label}.npz", lift)
         sparse.save_npz(out_dir / f"tscore_{label}.npz", tscore)
+
+        # Same deck population `result` was itself built over -- see
+        # compute_color_conditioned_tscore's own docstring for why this must be scoped, not global.
+        color_identity_deck_counts = build_color_identity_deck_counts(conn, slot_key=slot_key)
+        tscore_color = compute_color_conditioned_tscore(result, card_identities, color_identity_deck_counts)
+        sparse.save_npz(out_dir / f"tscore_color_{label}.npz", tscore_color)
+
         return ScopeStats(
             label=label,
             n_cards=result.n_cards,
@@ -530,12 +639,12 @@ def build_and_save(
         )
 
     global_result = build_cooccurrence(conn, card_index, slot_key=None)
-    stats.append(_save("global", global_result))
+    stats.append(_save("global", global_result, slot_key=None))
 
     slot_labels = {}
     for spec in configured_slots(conn):
         slot_result = build_cooccurrence(conn, card_index, slot_key=spec.slot_key)
-        stats.append(_save(spec.label, slot_result))
+        stats.append(_save(spec.label, slot_result, slot_key=spec.slot_key))
         slot_labels[spec.label] = spec.slot_key
 
     manifest = {
@@ -577,6 +686,10 @@ def load_pmi(label: str, out_dir: Path = KB_DEV_DIR) -> sparse.csr_matrix:
 
 def load_tscore(label: str, out_dir: Path = KB_DEV_DIR) -> sparse.csr_matrix:
     return sparse.load_npz(out_dir / f"tscore_{label}.npz")
+
+
+def load_tscore_color(label: str, out_dir: Path = KB_DEV_DIR) -> sparse.csr_matrix:
+    return sparse.load_npz(out_dir / f"tscore_color_{label}.npz")
 
 
 def top_associated(

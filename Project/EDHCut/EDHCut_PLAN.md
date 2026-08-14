@@ -440,256 +440,22 @@ Depends on: 5.2–5.5.
 ### Task 5.7 — Metagame sample harvest *(added 2026-08-09)*
 Depends on: 5.2, 5.3-B, 5.4-B. Unblocks: 6.1 rebuild, 6.3.
 
-**Motivation.** Task 6.3 found that synergy communities over the 5-commander roster corpus recover
-*the five commanders*, not card packages: the pooled association null model reads "both cards belong
-to commander X's pool" as synergy (measured evidence in 6.3's status block). Broadening the corpus is
-the primary fix — with ~800 commanders no single one forms a dominant block, so pooled marginals
-approximate real metagame frequencies. **This supersedes stratification-by-slot as the main remedy**:
-a stratified estimator degenerates at small per-stratum sample sizes (as `N_s → 1` the stratified
-expectation converges on the observation and the statistic goes to 0), so it does not combine with a
-wide-but-shallow sample. Stratification stays available for roster-scoped analyses, where strata are
-large enough to estimate.
-
-**Verified live (2026-08-09) before designing:**
-- `edhrec.com/commanders` returns **100** commanders (cardlist tag `past2years`), not 1,000 — its
-  "load more" control paginates client-side. Per entry: `name`, `num_decks`, `rank`, `slug`.
-- The 32 colour-identity pages are the cheaper route to breadth: **32 cached page fetches → ~2,900
-  distinct commanders** with global deck counts.
-- **All 32 slugs resolve except `wr` — Boros is `rw`** (the enemy-pair chain runs WB → BG → GU → UR →
-  RW). Guild/shard names work as aliases (`boros`, `azorius`, `golgari`). Colourless is `colorless`;
-  `c` 404s.
-- Availability is heavily skewed. Every 1–3 colour identity returns a full 100; the 4-colour
-  identities list only 9–45 commanders total (`ubrg`/`brgw`/`gwub` = 9 each), most far below any
-  meaningful play threshold.
-- **The union of the 32 identity pages filtered at `num_decks ≥ 2,300` is exactly 999 distinct
-  commanders, zero duplicates** — an exact match for the user's observation that the 999th-ranked
-  commander sits at 2,301 decks. So this union *is* the global top-1000, reconstructed without
-  paginating `/commanders` at all. Deck counts span 2,301 … 49,456. **No identity is truncated**:
-  the most any single identity contributes above the threshold is 50 (Five-Color) against the
-  100-per-page cap, so the truncation risk flagged when this route was first proposed is ruled out
-  empirically rather than assumed away. Per-identity counts above threshold: Golgari 48, Boros 48,
-  Orzhov 47, Gruul/Simic/Izzet 45, Five-Color 50 … but Yore 3, Glint 2, Dune 2, Ink 4, Witch 3,
-  Colourless 10.
-
-**Decisions (agreed with the user, 2026-08-09):**
-1. **Commander selection — every commander with `num_decks ≥ 2,300`, no per-identity cap: 999
-   commanders.** An earlier draft capped this at top-30 per identity to force colour diversity; the
-   cap was dropped once the live numbers showed (a) the natural distribution is already balanced
-   (22–50 per 1–3 colour identity) and (b) the uncapped set is *exactly* the global top-1000. A
-   principled definition — "the 999 most-played commanders" — beats an arbitrary per-identity quota,
-   and more commanders means better confound breaking. The 4-colour identities contribute only 2–4
-   each, correctly reflecting that they barely exist competitively.
-2. **Deck allocation — `n_s = clip(round(25 · √(num_decks_s / max_num_decks)), 5, 25)`.** √-share
-   rather than proportional: proportional allocation would let the top commanders eat the budget and
-   collapse tail coverage, reintroducing the very dominance this task exists to remove. Bounds keep
-   the popular end informative without starving the tail. Realised against the live distribution:
-   **9,355 decks, mean 9.4 per commander** (median 8, spread 5–25), ~14,900 requests, **≈8.3 h** at
-   the configured 2.0 s delay — sized to the user's stated ~8 h budget. Combined with the existing
-   roster corpus: **≈13,300 decks across ~1,002 commanders.**
-3. **Keep the 2.0 s delay.** A larger footprint is a reason for more politeness, not less. Dropping
-   to 1.0 s (still inside the ~1 req/s the plan's §5 research called tolerated) would halve runtime
-   and is available as a knob, but is not the default.
-4. **Design weights apply to every deck, roster included.** `w_s = true_share_s / sample_share_s`
-   from `edhrec_num_decks`. The roster commanders are simply over-sampled strata — they keep their
-   extra resolution while contributing their true metagame share. **Weights are computed at analysis
-   time, never baked into the harvest**, and each analysis chooses: near-uniform for community
-   detection (diversity matters more than representativeness), weighted for play-rate/staples. Same
-   raw-alongside-weighted convention as `precon_card_retention`.
-5. **`-updatedAt` ordering, not `-viewCount`.** The roster harvest's view-count ordering biases
-   toward famous netdecked lists — tolerable at 300 decks/commander, badly distorting at 5–25.
-   **Verified live (2026-08-09)** across 3 non-roster test commanders spanning the popularity range
-   (Breya rank 50, Jarad rank 500, Thraximundar rank 950), 25 real candidates each, run through the
-   exact filter pipeline `harvest_slot` uses (staleness, commander-tag confirmation, exact
-   99-card-library check):
-
-   | order | checked | kept | rate | stale | mismatch | bad_size |
-   |---|---|---|---|---|---|---|
-   | `-viewCount` | 75 | 40 | 53.3% | 20 | 4 | 16 |
-   | `-updatedAt` | 75 | 51 | **68.0%** | **0** | 1 | 23 |
-
-   `-viewCount` pulls in old decks that fail the staleness check (up to 48% of one commander's
-   candidates); `-updatedAt` can't be stale by construction, and that alone outweighs a real but
-   smaller increase in work-in-progress lists failing the card-count check. Confirms the plan's
-   original reasoning (avoid netdecked bias) and improves keep rate too — plain `-updatedAt`
-   paging over enough pages already gives a natural, non-viewcount-biased sample, so no separate
-   random-sampling step is needed on top of it. **68% measured vs. 70% assumed in the runtime
-   estimate — close enough not to revise it.**
-
-   **Also found**: Archidekt's `orderBy` param isn't server-side validated — a nonsense value
-   (`bogusOrderValue`) returned HTTP 200 with results silently identical to `-updatedAt`'s own
-   ordering, rather than an error. A typo'd `orderBy` in code would silently degrade instead of
-   failing loud, so the meta-harvest must use `-updatedAt` verified exactly as above, not a value
-   assumed correct because the request merely succeeded.
-6. **Roster commanders are not re-harvested.** Krenko, Kyler and Yenna clear the 2,300 threshold and
-   are already in the 999; they keep their existing decks at full resolution and only gain an
-   `edhrec_num_decks` row so the weighting can place them. Yoshimaru, Bruse Tarl and Orysa fall
-   below the threshold and simply have no metagame-sample counterpart — expected, and consistent
-   with Orysa being the plan's designated cold-start slot. So **996 commanders are actually
-   harvested.**
-
-**Steps:**
-1. ✅ **Done (2026-08-09).** `edhcut/ingest/edhrec_commanders.py` — fetches the 32 identity pages,
-   merges, applies the selection rule, asserts every slug resolved. New table `meta_commanders
-   (slot_key, commander_oracle_id, partner_oracle_id, name, color_identity, edhrec_num_decks,
-   edhrec_rank, sample_target, fetched_at)` — `slot_key`/`commander_oracle_id`/`partner_oracle_id`
-   mirror `decks`'s own convention (`edhcut.ingest.archidekt.slot_key_for`) rather than a single
-   `oracle_id` column, found necessary live: EDHREC lists a partner-pair commander as one row,
-   `name` = "A // B" (~4.3% of the pool, 43/999). Run for real: **999/999 resolved, 0 unresolved**
-   (43 partner pairs correctly split, whole-name-first resolution guards against a DFC's own name
-   colliding with the separator). 16 new tests, 266/266 passing overall.
-2. ✅ **Done (2026-08-09).** Live-verified Archidekt `orderBy` — see decision 5 above for the full
-   keep-rate comparison. `-updatedAt` confirmed as both the less-biased and the higher-keep-rate
-   choice; candidate-pool depth to hit `n_s` keepers follows directly from the measured 68% rate
-   (~1.5 candidates per keeper needed).
-3. ✅ **Done (2026-08-09).** `edhcut/ingest/archidekt.py` gained a meta-sample mode:
-   `run_meta_sample()` + `python -m edhcut.ingest.archidekt --meta-sample [--meta-sample-limit N]`.
-   Reuses `harvest_slot` unchanged in its core logic (now accepting `order_by`/`cohort`/
-   `already_seen_source_ids`) rather than duplicating it. New `decks.cohort` column (`'roster'`
-   default | `'meta_sample'`), with a `WHERE decks.cohort != 'roster'` guard on the upsert conflict
-   clause so a meta-sample search can never downgrade an existing roster deck — a real collision
-   path, not just theoretical (several meta-sample commanders are the *other* half of an existing
-   roster partner pair, e.g. Yoshimaru pairs with other legends in the wild too). All four
-   survive-an-unattended-run requirements verified, three inherited for free from existing
-   machinery rather than newly built: per-commander error isolation and retry/backoff already
-   existed in `harvest_slot`/`request_with_retry` (tenacity, 5 attempts) and just needed the
-   orchestrator to not `break` on an error, unlike the roster `run()`; commit checkpointing
-   already happens per-deck in `_write_deck_cards`. Only resumability was new:
-   `already_seen_source_ids` seeds `harvest_slot`'s dedup set so a resumed commander's
-   `decks_per_commander` means "how many *more*," never re-fetching or double-counting.
-   **Verified live end-to-end** (not just against fakes): a 2-commander run (The Ur-Dragon, Edgar
-   Markov, 25 decks each) kept exactly 50/50 with roster's 3,921 decks untouched; re-running the
-   identical command completed in **0.6s making zero network requests**, correctly reporting
-   "2 already complete from a prior run" with deck counts unchanged (25/25 each, no duplication).
-   **Real bug found and fixed before it could bite**: the smoke test above happened to hit only
-   non-roster commanders, so it didn't surface that the first version of `run_meta_sample`
-   iterated over *every* `meta_commanders` row with no roster exclusion at all — Krenko, Kyler,
-   and Yenna all clear the 2,300-deck threshold and so have their own row, and the full run would
-   eventually have reached them (Krenko is rank 5) and harvested a redundant `meta_sample`-cohort
-   corpus alongside their existing much larger roster one, contradicting this task's own "roster
-   commanders are not re-harvested" decision. Fixed by resolving `CONFIG.commander_slots` to
-   their slot_keys and excluding those rows entirely before the harvest loop even starts; verified
-   both against a dedicated regression test (a fake session that raises if Krenko is ever
-   searched) and live against the real DB (confirms exactly Krenko/Kyler/Yenna match by slot_key,
-   Yoshimaru+Bruse Tarl/Orysa aren't in the pool at all so there's nothing to exclude for them).
-   29 new tests (13 dedicated + updates), 279/279 passing overall.
-4. ✅ **Done (2026-08-09).** `edhcut/analysis/deck_weights.py`: `compute_deck_weights(conn) ->
-   {slot_key: weight}` (`w_s = true_share_s / sample_share_s`, both computed only over
-   `meta_commanders` slots), `deck_weight(weights, slot_key, default=1.0)` for the lookup at call
-   sites, `python -m edhcut.analysis.deck_weights` to eyeball the current spread. A slot with no
-   harvested decks is left out of the mapping (undefined ratio) rather than assigned an arbitrary
-   number; callers default a missing slot_key to 1.0, same "unresolved → neutral" convention
-   `cooccurrence.py`'s own precon weighting already established. Verified live against the current
-   (very partial — only 5 of 999 slots harvested so far) real DB: Kyler 0.0021, Yenna 0.0051,
-   Krenko 0.0098 (all correctly heavily down-weighted — thousands of roster decks against a tiny
-   true-metagame share) vs. Edgar Markov 0.9027 / The Ur-Dragon 0.9066 (near 1 — the least
-   oversampled of what's harvested today). These numbers are expected to shift substantially as
-   more of the 996 remaining commanders are harvested, by design (§ "computed at analysis time,
-   never baked into the harvest") — not a bug, just early-stage sparse data. 7 new tests,
-   286/286 passing overall.
-5. ✅ **Done.** Run command handed over; user ran the full harvest themselves. Completed
-   2026-08-10: 996/996 eligible commanders harvested, 9,286 `meta_sample` decks + the existing
-   3,921 `roster` decks = **13,207 decks total**.
-6. ✅ **Done (2026-08-09).** Matrix-scale guardrail, before rebuilding anything. At ~13,300 decks
-   the card pool at `MIN_DECK_COUNT=3` is expected to grow from 4,798 to roughly 15–22k cards.
-   Dense `n × n` float32 is 92 MB at n=4,798, **900 MB at 15k, 1.6 GB at 20k, 2.5 GB at 25k**.
-   - (a) **Audited first, not assumed**: grepped the whole package + `scripts/` for
-     `.toarray()`/`.todense()`/`np.outer`/etc. `compute_pmi`/`compute_lift`/`compute_tscore`
-     already iterate `CooccurrenceResult.pair_weighted` (a dict, O(nnz)); `top_associated`'s only
-     `.todense()` call is on a single sparse *row* (O(n)); `communities.py`'s graph build is
-     `lil_matrix`/sparse elementwise ops throughout. **One real risk found**:
-     `scripts/plot_matrix_overview.py`'s full-matrix heatmap does `reordered.toarray()
-     [:n_nonzero, :n_nonzero]`, where `n_nonzero` scales with corpus size (worst case, the global
-     scope, close to the full pool) — a genuine dense conversion, not a bounded submatrix like
-     `plot_pmi_heatmap.py`'s (that one's bounded by `-k`, default 20, regardless of corpus size).
-   - (b) `assert_dense_matrix_safe(n, dtype_bytes=8, max_bytes=MAX_DENSE_MATRIX_BYTES)` added to
-     `cooccurrence.py` (2 GiB default — safe up to ~16.3k cards at float64, deliberately inside
-     today's pool but not the anticipated post-harvest one, so it's a real tripwire, not a
-     rubber stamp). Wired into `cooccurrence.build_and_save`, `communities.build_and_save`, and
-     the one real risk spot in `plot_matrix_overview.py` (using the matrix's own dtype size, not
-     assuming float64). Raises `MemoryError` with an actionable message (avoid the dense
-     conversion, restrict to a submatrix, or raise `MIN_DECK_COUNT`) rather than silently
-     thrashing swap.
-   - (c) ✅ **Resolved (2026-08-10), differently than either lever the message names.** Real
-     post-harvest pool at `MIN_DECK_COUNT=3`: **18,979 cards** — the guardrail fired exactly as
-     designed (2.68 GiB dense estimate > the 2 GiB ceiling). But measuring what the real global
-     co-occurrence build actually allocates (not the guardrail's `n²` worst case) showed the
-     dense estimate was never realistic to begin with: **10,666,504 nonzero pairs at 5.9%
-     density**, and the PMI/t-score sparse matrices are **~63 MiB each in memory** — ~40x under
-     the naive dense figure — because nothing in `cooccurrence.py` or `communities.py` actually
-     performs a full-pool dense conversion (per the (a) audit above, still true). So neither
-     raising `MIN_DECK_COUNT` nor raising `MAX_DENSE_MATRIX_BYTES` was the right fix — the
-     `assert_dense_matrix_safe(len(card_index))` calls in both modules' `build_and_save` were
-     themselves the bug, checking a scenario the code never hits. **Removed both call sites**
-     (kept the function and its one genuine use in `plot_matrix_overview.py`'s heatmap, which
-     really does call `.toarray()` on a bounded submatrix). `MIN_DECK_COUNT` stays at 3 — this
-     matters for the deployment goal too: the real per-scope memory footprint scales with nnz,
-     not `n²`, so it stays small (tens of MB) even as the corpus keeps growing.
-   - (d) Already done as of task 6.1 — `cooccurrence_manifest.json` has recorded per-scope
-     `n_cards`/`cooccur_nnz_pairs`/`density` since that task; `communities_manifest.json`
-     likewise records `n_cards_total`/`n_cards_in_graph`/`n_edges` since task 6.3. Added
-     `max_dense_matrix_bytes` to the co-occurrence manifest too, so the ceiling in effect at
-     build time is itself visible later.
-   - 4 new tests (small size passes, oversized raises, dtype-bytes sensitivity, a regression
-     pin that today's real ~4.8k pool never trips the default ceiling), 290/290 passing overall.
-     Not re-verified live against the real DB this round — the metagame harvest is actively
-     writing to it in the background and the DB isn't in WAL mode, so a concurrent heavy read
-     risked lock contention for no real additional confidence (the guard is a cheap, side-effect-
-     free arithmetic check, already covered by the unit tests above, and the underlying build
-     pipelines it's wired into were already confirmed working against real data earlier this
-     session).
-7. ✅ **Done (2026-08-10).** Rebuilt co-occurrence/t-score, play rates and communities on the
-   combined 13,207-deck corpus. Full detail in `docs/devlog/6.3-synergy-communities.md`'s
-   rebuild section; summary:
-   - `cooccurrence build`: global scope now 18,979 cards, 10,666,504 cooccur pairs, 2,749,845
-     pmi pairs (5.9% density). Sanity check held: Cultivate's #1 PMI neighbor is still Kodama's
-     Reach.
-   - **Re-measuring cluster/slot purity (the plan's own standing regression check) found a real
-     residual confound**, smaller than before but genuine: 3 of 26 clusters were still
-     disproportionately traceable to Krenko/Kyler/Yenna specifically — the only 3 commanders
-     that clear the `meta_commanders` threshold *and* keep their full oversampled roster deck
-     count (thousands vs. ~9 typical). Root cause: broadening the corpus fixes the *pooled*
-     confound (no single commander is a large fraction of ~1,000), but does nothing about these
-     3 specific outliers still being 100–200x oversampled relative to a typical slot.
-   - **Fix**: a new `edhcut.analysis.deck_weights.compute_near_uniform_weights(conn)` —
-     `weight_s = median(decks_per_slot) / n_s` over every slot in `decks` (not just
-     `meta_commanders`, so it also catches Yoshimaru+Bruse Tarl and Orysa) — flattens every
-     commander's *total* weighted contribution to the same value, regardless of real-world
-     popularity. **Deliberately not `compute_deck_weights`** (that formula restores each
-     commander's *true* metagame share — still large for a genuinely popular commander — which
-     is what play-rate/staple analyses want, not communities; this was caught and corrected
-     mid-session, see the module's own docstring). `build_cooccurrence` gained an optional
-     `deck_slot_weights` parameter (multiplies each deck's contribution, and `total_weight`
-     follows the weighted sum so the t-score null model stays self-consistent); wired into
-     `communities.py`'s `build_and_save` only, by explicit decision — `top_associated`/PMI keeps
-     the unweighted global scope.
-   - **Verified the fix landed**, not just assumed: a known Krenko-confounded pair (Goblin
-     Warchief + Skirk Prospector) dropped from t-score 35.2 (unweighted) to 6.2 (weighted).
-     Re-measuring purity *under the same weighting the graph itself used* (the raw/unweighted
-     purity check is no longer a fair lens once one commander has 200x a typical slot's deck
-     count — it'll always show that commander "dominating" by sheer volume regardless of whether
-     the clustering itself is confounded) showed the top 11 clusters (holding the large majority
-     of the 18,297 graphed cards) all under 2% single-commander purity across 800–1,000 distinct
-     commanders each. Only small tail clusters (low hundreds of cards) show higher purity —
-     expected for genuinely niche packages.
-   - Qualitative eyeball check (the plan's own success criterion) also passed: Skirk Prospector's
-     cluster reads as Rakdos aggro/goblins (Blood Crypt, Chaos Warp, Impact Tremors, Goblin
-     Warchief …), Cultivate's cluster reads as Naya ramp/midrange (Stomping Ground, Avacyn's
-     Pilgrim, Beast Within, Heroic Intervention …) — recognizable archetype packages, not one
-     commander's decklist.
-   - `playrate build`: rebuilt unweighted (matches existing code, no design change) — 13,207
-     decks, 31,623 cards, all 32 colour identities now populated (was 7/32 pre-harvest, the
-     plan's own predicted "expected side effect"). Wiring `compute_deck_weights`'s true-share
-     weighting into play rate itself (per decision 4's "weighted for play-rate/staples") is a
-     separate, not-yet-implemented follow-up, not done as part of this rebuild.
-   - 7 new tests (near-uniform weight formula + `deck_slot_weights` parameter), 315/318 passing
-     overall (3 pre-existing skips, unrelated to this work).
-   - Next: return to 6.3 with **soft/overlapping clustering (NMF)** — decided: cards genuinely
-     belong to several packages (Ashnod's Altar is a sac outlet *and* a combo piece), and NMF
-     additionally yields deck→package proportions directly, which is what task 7.2 needs.
-
-**Expected side effect (positive):** `edhcut/analysis/playrate.py`'s documented limitation — only 7
-of 32 colour identities have any decks, distorting eligibility denominators — is largely fixed by
-this harvest.
+> ✅ **Done (harvest completed 2026-08-10).** Full design, live verification, and build detail:
+> `docs/devlog/5.7-metagame-harvest.md`. Summary: not originally planned — born from 6.3's
+> confound (synergy communities over the 5-commander roster corpus recovered the five commanders,
+> not card packages). Harvested a broad metagame sample — every commander with EDHREC
+> `num_decks ≥ 2,300` (999, reconstructed exactly from the 32 colour-identity pages, matching the
+> user's own live observation), √-share deck allocation (5-25/commander, not proportional, so
+> popular commanders don't eat the tail's budget). **996 commanders harvested, 9,286 new decks +
+> 3,921 existing roster decks = 13,207 total.** Design weights (`deck_weights.py`) computed at
+> analysis time, never baked into the harvest — near-uniform for community detection, true-share
+> for play-rate/staples (two different formulas, see task 6.3's status block for why they're not
+> interchangeable). A matrix-scale guardrail added pre-emptively for the anticipated 15-22k-card
+> pool later turned out to be a false-positive tripwire once the real size was known — resolution
+> in task 6.1's own status block, not repeated here. The corpus rebuild + task 6.3's own
+> follow-through are documented under task 6.3, not here — this task is scoped to the harvest
+> itself. Expected side effect confirmed: `playrate.py`'s only-7/32-colour-identities-populated
+> limitation is fixed (all 32 now have decks).
 
 ---
 
@@ -744,6 +510,13 @@ Depends on: 5.3, 5.6 passing sanity checks.
 > too rather than fixed twice. Also: `data/kb/dev/`'s matrices + `card_index.parquet` were
 > rebuilt against the corpus's continued growth (now 3,921 decks, up from 1,230 at 6.1's own
 > completion) — no longer stale as of this session's end.
+>
+> **Extended again (2026-08-12)**: `compute_color_conditioned_tscore` fixes a real same-color
+> legality bias in the pooled null model (two unrelated same-color cards previously scored as
+> associated purely from shared color-identity eligibility, not synergy). Full formula, the
+> self-validating colorless-cancellation property, and the 20-pair live validation:
+> `docs/devlog/6.1-cooccurrence.md`'s own addendum. Not yet wired into PMI/lift, `top_associated`,
+> or NMF (no active consumer yet — hard clustering, the original motivation, is currently unused).
 >
 > Read `EDHCut/EDHCut_PLAN.md` §2.4, §7. Implement
 > `edhcut/analysis/cooccurrence.py`: build a card index (cards in ≥3 decks), then sparse
@@ -821,57 +594,94 @@ Depends on: 6.1.
 > payoffs", "sac outlets"). Devlog entry (grid results table, chosen resolution + why,
 > seed-stability numbers, named example clusters — prime final-report material).
 
-> **Status (2026-08-09): implemented, first build rejected on a confound; revised approach below.**
-> Full writeup: `docs/devlog/6.3-synergy-communities.md`.
-> `edhcut/analysis/communities.py` + the `python-igraph`/`leidenalg` deps are in place and working
-> (graph build, top-K sparsification, resolution sweep, seed stability via ARI, `clusters.parquet`,
-> sanity CLI). Two deviations from the prompt above, both decided explicitly with the user:
-> **global scope only** (per-slot clusters cannot exist for a commander outside the roster, and
-> `cluster_of` needs to generalize to unseen commanders) and **t-score instead of PMI** (settles
-> the metric question deferred in devlog `6.1b`).
+> **Status: done, iterated significantly 2026-08-09→12.** Full history (first-build confound
+> diagnosis with real pair/purity numbers, the stratification prototype and why corpus-broadening
+> superseded it, the 5.7-corpus rebuild, the NMF addition, and the granularity/color-bias
+> findings) lives in `docs/devlog/6.3-synergy-communities.md` — kept there, not duplicated here.
 >
-> **Blocking finding:** the communities returned are the five commander slots, not synergy
-> packages — cluster/slot purity 80.9% Krenko, 66.9% Kyler, 97.0% Yoshimaru+Bruse Tarl, 98.8%
-> Yenna, 98.4% Orysa. The root cause is the *null model*, not the metric family, the clustering
-> algorithm, or the graph construction: t-score's expected count `E = N·p_i·p_j` draws its
-> marginals from a corpus that is five commanders' decks pooled, so any two cards from the same
-> slot score high purely for co-slot membership. Measured on real pairs (`O` = decks containing
-> both, `t_pool` = as implemented, `t_strat` = within-slot-stratified expectation):
+> **Current state**: **soft clustering (NMF, `edhcut/analysis/nmf_packages.py`) is the active
+> mechanism.** Hard clustering (`communities.py`, Leiden) is implemented and tested but dropped
+> from active use by decision (NMF's soft membership subsumes a hard label — it's just a card's
+> `argmax` topic — and maintaining two separate confound-fixes for the same problem wasn't worth
+> it). Two deviations from the original prompt, both decided with the user: global scope only
+> (per-slot can't generalize to an unseen commander) and t-score, later NMF, instead of PMI.
 >
-> | pair | O | t_pool | t_strat |
-> |---|---|---|---|
-> | Goblin Warchief + Skirk Prospector | 1,696 | 20.58 | 0.98 |
-> | Champion of Lambholt + Heronblade Elite | 986 | 22.09 | 1.93 |
-> | Sythis, Harvest's Hand + Setessan Champion | 256 | 14.64 | 0.95 |
-> | Sol Ring + Arcane Signet | 2,143 | 5.27 | 4.90 |
+> **Two open findings from live user review (2026-08-12), one fixed**: (1) **granularity** — 40
+> NMF topics vs. EDHREC's own ~400-tag theme/typal taxonomy (`edhrec_themes`, already imported);
+> real, but a corpus-depth limit (both Leiden's and NMF's own selection criteria independently
+> topped out ~40), not yet addressed — live recommendation is to use `edhrec_themes`/`card_tags`
+> as supervision rather than push k/resolution harder (NMF fit cost scales ~k^2.25, prohibitively
+> for a wide sweep). (2) **same-color legality bias** — fixed for co-occurrence/t-score (task
+> 6.1's own status block), NMF's own version (several topics 80-93% single-color) still open,
+> different mechanism (no null model to correct).
 >
-> Almost all of the top-ranked "synergy" is the confound. The one pair surviving stratification
-> intact (Sol Ring + Arcane Signet) is the one that is not slot-specific.
+> Exploration notebook: `notebooks/communities_exploration.ipynb`. Next planned session: visually
+> explore/improve the NMF communities from there.
 >
-> **Revised approach (validated before adopting):** stratify the expected count by slot,
-> `E = Σ_s N_s·p_i^(s)·p_j^(s)`. Signal volume drops sharply (43 pairs above t=8, vs. 8,539
-> pooled) but becomes qualitatively correct — the top stratified pairs are exactly the packages
-> this task's own sanity check calls for: Dragon Fodder / Hordeling Outburst / Krenko's Command
-> (goblin tokens), Ashnod's Altar / Phyrexian Altar / Thornbite Staff / Umbral Mantle (sac outlets
-> + untap combo), Goblin Lackey / Warren Instigator, plus functional twins like Terramorphic
-> Expanse / Evolving Wilds and Three Visits / Nature's Lore.
+> **Follow-up task 6.3-B is done (2026-08-12)** — plan in
+> `docs/plans/6.3b-communities-next-iteration.md`, full results in
+> `docs/devlog/6.3b-communities-next-iteration.md`. New modules: `edhcut/analysis/
+> symnmf_packages.py` (color-corrected soft clustering via symmetric NMF over
+> `compute_color_conditioned_tscore`), `edhcut/analysis/symnmf_hierarchy.py` (recursive
+> decomposition for granularity), `edhcut/analysis/theme_labels.py` (the `card_tags`/
+> `edhrec_themes` enrichment/purity measuring stick, built and validated first). **Granularity:
+> fixed.** Resolved-label count peaks 356/985 around n_leaves=1,200 (from 74/953 at flat k=40);
+> both pre-declared targets (resolved ≥250, median labels/topic ≤6) hold simultaneously from
+> ~n_leaves=1,700. Step 4 (anchored/semi-supervised SymNMF) was evaluated and not needed — the
+> curve never saturated below target. **Color bias: not fixed, and now better understood, not
+> just still open.** Switching to symmetric NMF over the already-validated color-corrected matrix
+> barely moved topic-level purity (66.7% → 68.3%) despite a real, measured edge-level effect
+> (48.3% → 44.7% same-color-identity share among top-50 neighbors) — most of what looked like
+> bias in the flat build now looks like genuine archetype structure the correction correctly
+> leaves alone, not an artifact it failed to remove. **Girvan-Newman**: correctly ruled out
+> globally, and — found live, not assumed — also infeasible at "one topic" scale (topic 9's real
+> subgraph took ~65 minutes; a top-150-by-weight restriction brought it to ~14s).
+> `community_fastgreedy` on the full graph (40-47s) stood in for the scalable dendrogram,
+> surfacing a directly-observed illustration of modularity's resolution limit (flat past ~16
+> clusters out to 1,000). Two real bugs found and fixed along the way (a `topic_id`-numbering
+> assumption in `theme_labels.granularity_report`, and a cross-node share-renormalization bug in
+> `symnmf_hierarchy.cut_at`), both regression-tested. Notebook: `notebooks/
+> communities_exploration.ipynb`, extended with all of the above.
+
+> **⚠ Everything above from "Current state" onward is superseded — task 6.3-C is the active
+> approach (2026-08-13).** Full detail in `docs/devlog/6.3c-louvain-communities.md`; 6.3-B's devlog
+> and plan moved to `docs/devlog/archive/` and `docs/plans/archive/`.
 >
-> Steps: (1) add `compute_stratified_tscore` to `cooccurrence.py`, **keeping** the pooled t-score —
-> it is a valid *archetype-membership* signal and plausibly useful to task 6.6, just not a synergy
-> one; (2) rebuild the community graph on it; (3) re-sweep resolution and try
-> `CPMVertexPartition` alongside `RBConfigurationVertexPartition` (CPM has no modularity
-> resolution limit and a directly-interpretable resolution parameter, better suited to the
-> fine-grained packages now expected); (4) re-run the sanity CLI. Known limitation to record
-> rather than tune away: the discoverable packages are bounded by what varies *within* the five
-> slots — a broader multi-commander harvest is the real lever for wider coverage. If hard
-> partitions prove a poor fit (Ashnod's Altar genuinely belongs to several packages), the upgrade
-> path is soft/overlapping membership — NMF over the deck×card matrix (scikit-learn is already a
-> dependency) additionally yields deck→package proportions directly, which is what task 7.2 wants.
+> Soft clustering (NMF / symmetric NMF) was **dropped at the user's direction**: communities too
+> large, colour bias never solved, tooling not understandable. **Hard clustering is active again —
+> Louvain via networkx** (not Leiden: `louvain_partitions` yields every level of the recursive
+> merge from one run, which is the granularity knob). Interactive 2D graph via `ipysigma`
+> (ForceAtlas2 in-browser, WebGL, handles all 18k nodes). New notebook
+> `notebooks/louvain_communities.ipynb`; the old one is at `notebooks/archive/`.
 >
-> Basic lands (5 types + Wastes + snow variants; 9 in the pool) are excluded as graph nodes: a
-> basic's near-universal per-color inclusion made it co-occur above chance with every archetype of
-> its color (graph degree 1,000+ against a median of 15). No other land is excluded. This was a
-> real but secondary effect — excluding them alone did not resolve the confound.
+> **Result: 214 communities, 114 package-sized (8–60 cards), zero singletons, Q=0.576** at level 0,
+> γ=2, over 18,381 nodes / 223,979 edges. Communities read as real packages (Extra Turns, Shrines,
+> Cascade, Allies, Deserts, Landfall, Equipment) — the qualitative success criterion this task set
+> in the first place, which the 40 NMF topics never met.
+>
+> **Granularity: solved by the level hierarchy, not by γ.** A sweep of the final partition across
+> γ ∈ [0.5, 5] never exceeded 24 package-sized communities; level 0 of one γ=2 run gives 114.
+>
+> **Colour bias: closed as "accept and report".** A third independent measurement (Louvain on plain
+> vs. colour-conditioned t-score: 52.9% vs 52.1% purity, null ~20%) confirms the signal is in the
+> data, not the algorithm. The notebook now measures purity per community and reports it.
+>
+> **Deck weighting is now a permanent guard.** The saved `data/kb/dev/` matrices are all unweighted
+> (`cooccurrence.build_and_save` never passes `deck_slot_weights`); the notebook rebuilds weighted
+> and caches to `tscore_color_global_nearuniform.npz`. A regression here was caught **by the user
+> from the rendered graph**, not by any test — the notebook's overview now always prints per-slot
+> domination (Krenko 72.4%, Kyler 38.9%, Yenna 64.3%).
+>
+> **Community auto-naming added** — `card_tags` scored by `share × log(1+lift)`. Its failure mode is
+> the useful part: a best-tag lift < 3 means no mechanical theme, which fires on 5 of the 12 largest
+> communities and flags exactly the staple piles.
+>
+> **Three open quality problems, carried forward (details + proposed fixes in the 6.3-C devlog):**
+> (1) t-score is a *significance* measure, so generic staples (Arcane Signet, lift 1.24) tie with
+> genuine synergy pieces (King of the Pride, lift 61.9) on Lion Sash's edge list — proposed fix is a
+> t-score-and-lift two-gate, with an unresolved threshold tension; (2) the low-degree tail
+> (strength ≈1–3, one weak edge) gets assigned arbitrarily and pollutes communities; (3) precon
+> shells survive `precon_card_weight` — community 160 is 16/18 one Marvel precon.
 
 ### Task 6.4 — Functional role classification
 Depends on: 5.5.

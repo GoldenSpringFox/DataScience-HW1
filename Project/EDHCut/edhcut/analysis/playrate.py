@@ -55,50 +55,94 @@ def canonical_identity(colors: Iterable[str]) -> str:
     return "".join(c for c in _WUBRG if c in colors)
 
 
-def build_deck_color_identities(conn: sqlite3.Connection) -> pd.DataFrame:
-    """One row per deck: `deck_id`, `color_identity` -- the union of the deck's commander(s)'
-    own `cards.color_identity` (a partner deck's identity is both commanders' union, same rule
-    Commander deckbuilding itself uses for legality). Every `decks` row has a non-NULL
-    `commander_oracle_id` (5.3-B's own harvest guarantee); `partner_oracle_id` is NULL for a
-    single-commander deck."""
-    rows = conn.execute(
-        """
-        SELECT d.deck_id, c1.color_identity, c2.color_identity
+def build_deck_color_identities(conn: sqlite3.Connection, *, slot_key: str | None = None) -> pd.DataFrame:
+    """One row per deck: `deck_id`, `slot_key`, `color_identity` -- the union of the deck's
+    commander(s)' own `cards.color_identity` (a partner deck's identity is both commanders'
+    union, same rule Commander deckbuilding itself uses for legality). Every `decks` row has a
+    non-NULL `commander_oracle_id` (5.3-B's own harvest guarantee); `partner_oracle_id` is NULL
+    for a single-commander deck. `slot_key` is each deck's own commander-slot key (distinct from
+    the `slot_key` filter parameter below) -- carried through so
+    `build_color_identity_deck_counts`'s `deck_slot_weights` option can look up each deck's own
+    weight without a second query.
+
+    The `slot_key` parameter, if given, restricts to that commander slot's own decks -- for
+    scoping eligible-deck-count math to the same deck population a per-slot analysis (e.g.
+    `cooccurrence.build_cooccurrence`) is itself scoped to, rather than every harvested deck."""
+    query = """
+        SELECT d.deck_id, d.slot_key, c1.color_identity, c2.color_identity
         FROM decks d
         JOIN cards c1 ON c1.oracle_id = d.commander_oracle_id
         LEFT JOIN cards c2 ON c2.oracle_id = d.partner_oracle_id
-        """
-    ).fetchall()
+    """
+    params: tuple = ()
+    if slot_key is not None:
+        query += " WHERE d.slot_key = ?"
+        params = (slot_key,)
+    rows = conn.execute(query, params).fetchall()
 
     records = []
-    for deck_id, ci1_json, ci2_json in rows:
+    for deck_id, deck_slot_key, ci1_json, ci2_json in rows:
         colors = set(json.loads(ci1_json or "[]"))
         if ci2_json is not None:
             colors |= set(json.loads(ci2_json or "[]"))
-        records.append({"deck_id": deck_id, "color_identity": canonical_identity(colors)})
-    return pd.DataFrame(records, columns=["deck_id", "color_identity"])
+        records.append(
+            {"deck_id": deck_id, "slot_key": deck_slot_key, "color_identity": canonical_identity(colors)}
+        )
+    return pd.DataFrame(records, columns=["deck_id", "slot_key", "color_identity"])
 
 
-def build_color_identity_deck_counts(conn: sqlite3.Connection) -> pd.DataFrame:
+def build_color_identity_deck_counts(
+    conn: sqlite3.Connection,
+    *,
+    slot_key: str | None = None,
+    deck_slot_weights: dict[str, float] | None = None,
+) -> pd.DataFrame:
     """The fixed 32-row `color_identity` -> `deck_count` table (see module docstring) --
-    zero-filled for any of the 32 possible identities no harvested deck currently has."""
-    deck_identities = build_deck_color_identities(conn)
-    counts = deck_identities["color_identity"].value_counts()
+    zero-filled for any of the 32 possible identities no harvested deck currently has.
+    `slot_key` scopes to one commander slot's decks, same as `build_deck_color_identities`.
+
+    `deck_slot_weights` (`slot_key -> weight`, e.g. `edhcut.analysis.deck_weights.
+    compute_near_uniform_weights`), if given, turns `deck_count` into a *weighted* sum -- each
+    deck contributes its own commander slot's weight instead of 1, mirroring
+    `cooccurrence.build_cooccurrence`'s own `deck_slot_weights` handling so the two stay in the
+    same units (needed for `compute_color_conditioned_tscore`'s null model to scale correctly
+    when its `result` came from a weighted `build_cooccurrence` call -- see that function's own
+    docstring). A deck whose own slot_key is missing from `deck_slot_weights` defaults to weight
+    1.0, matching `deck_weights.deck_weight`'s "unresolved -> neutral" convention. The column
+    stays named `deck_count` either way -- callers that never pass `deck_slot_weights` see
+    output identical to before this parameter existed."""
+    deck_identities = build_deck_color_identities(conn, slot_key=slot_key)
+    if deck_slot_weights is None:
+        counts = deck_identities["color_identity"].value_counts()
+        return pd.DataFrame(
+            {
+                "color_identity": ALL_COLOR_IDENTITIES,
+                "deck_count": [int(counts.get(ci, 0)) for ci in ALL_COLOR_IDENTITIES],
+            }
+        )
+
+    deck_weights = deck_identities["slot_key"].map(lambda sk: deck_slot_weights.get(sk, 1.0))
+    weighted = deck_identities.assign(_weight=deck_weights).groupby("color_identity")["_weight"].sum()
     return pd.DataFrame(
         {
             "color_identity": ALL_COLOR_IDENTITIES,
-            "deck_count": [int(counts.get(ci, 0)) for ci in ALL_COLOR_IDENTITIES],
+            "deck_count": [float(weighted.get(ci, 0.0)) for ci in ALL_COLOR_IDENTITIES],
         }
     )
 
 
-def eligible_deck_count(color_identity_counts: pd.DataFrame, card_color_identity: str) -> int:
+def eligible_deck_count(color_identity_counts: pd.DataFrame, card_color_identity: str) -> int | float:
     """How many decks could legally run a card with this color identity: the sum of
     `deck_count` over every row in the 32-row table whose own identity is a *superset* of the
-    card's (a card is includable iff its color identity is a subset of the deck's)."""
+    card's (a card is includable iff its color identity is a subset of the deck's). Returns a
+    plain `int` for the default unweighted table (`deck_count` is integer-valued), or a `float`
+    once `build_color_identity_deck_counts`'s `deck_slot_weights` option makes it a weighted
+    sum -- the return type follows `deck_count`'s own dtype rather than always casting to `int`,
+    so a weighted eligible count isn't silently truncated."""
     card_colors = set(card_color_identity)
     is_superset = color_identity_counts["color_identity"].map(lambda ci: card_colors <= set(ci))
-    return int(color_identity_counts.loc[is_superset, "deck_count"].sum())
+    total = color_identity_counts.loc[is_superset, "deck_count"].sum()
+    return int(total) if pd.api.types.is_integer_dtype(color_identity_counts["deck_count"]) else float(total)
 
 
 def build_card_play_rates(

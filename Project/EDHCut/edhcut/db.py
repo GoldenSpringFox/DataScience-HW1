@@ -33,7 +33,11 @@ CREATE TABLE IF NOT EXISTS cards (
     layout TEXT,
     produced_mana TEXT,      -- JSON array as TEXT
     is_land BOOLEAN,
-    image_uri TEXT           -- Scryfall CDN "normal"-size image (front face for multi-face cards)
+    image_uri TEXT,          -- Scryfall CDN "normal"-size image (front face for multi-face cards)
+    set_code TEXT,           -- Scryfall `set` of oracle_cards' one representative printing
+    collector_number TEXT    -- collector number within `set_code` -- together, a compact
+                              -- `s:<set_code> cn:<collector_number>` Scryfall search term, much
+                              -- shorter than `name:"..."` or `oracleid:<uuid>` per card
 );
 
 CREATE TABLE IF NOT EXISTS card_names (
@@ -258,7 +262,10 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "weighted_cut": "REAL NOT NULL DEFAULT 0",
         "weighted_kept": "REAL NOT NULL DEFAULT 0",
     },
-    "cards": {"image_uri": "TEXT", "power": "TEXT", "toughness": "TEXT"},
+    "cards": {
+        "image_uri": "TEXT", "power": "TEXT", "toughness": "TEXT",
+        "set_code": "TEXT", "collector_number": "TEXT",
+    },
 }
 
 
