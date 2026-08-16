@@ -683,6 +683,40 @@ Depends on: 6.1.
 > (strength ≈1–3, one weak edge) gets assigned arbitrarily and pollutes communities; (3) precon
 > shells survive `precon_card_weight` — community 160 is 16/18 one Marvel precon.
 
+> **⚠ Task 6.3-D is the active approach (2026-08-14) — symNMF is now the default.** Full detail in
+> `docs/devlog/6.3d-soft-communities-and-edge-quality.md`.
+>
+> Two arcs, both landed. **(a) Edge quality**, shared byte-identically by both notebooks: a second
+> sparsification gate (Jaccard neighbourhood overlap ≥ 0.03), a k-core membership floor (k=4), an
+> edge weight of `t-score × log(1+lift)`, and 12 excluded **format staples** (`max_lift < 3.5 AND
+> playrate ≥ 10%` — the same reasoning `communities.py` uses for basic lands, now measurable).
+> **(b) Soft clustering**: `notebooks/symNMF_communities.ipynb`, same structure and helpers as the
+> Louvain notebook for side-by-side reading.
+>
+> **Current build**: 16,026 nodes / 158,294 edges. symNMF k=200 → 200 topics, 104 package-sized,
+> 11.0% unassigned, **1.44 topics per card with 41% of cards in more than one** — the overlap that
+> motivated the switch (Lion Sash is 39% Cats / 30% Equipment / 24% equipment-tutors, which a hard
+> partition cannot say). Louvain retained as the comparison: 244 communities, 156 package-sized.
+>
+> **Three results worth not re-deriving.** (1) *Lift cannot gate or weight edges on its own* —
+> keep-pairs span lift 2.56–61.94 and drop-pairs 1.24–3.06, they overlap; only neighbourhood
+> overlap separates them. (2) *The Jaccard gate cannot touch the staple cluster* — 45 of 45
+> staple↔staple edges survive and Sol Ring↔Arcane Signet is the graph's highest-overlap pair at
+> 0.786; that confound is deck-level builder preference, not card interaction. (3) *Commanders are
+> invisible* — `deck_cards` holds 0 of 13,207 decks' commanders, so Krenko's node comes from the 88
+> decks where he was in the 99, not the 2,008 he leads.
+>
+> **Rejected after testing**: k-clique percolation (ignores edge weights; percolates to a
+> 15,479-node blob at k≤5), and degree normalisation `D^-1/2 S D^-1/2` (fixed the metrics but the
+> user judged the resulting communities worse — kept as a `NORMALIZE` toggle, default off).
+>
+> **Top open item**: `MIN_DECK_COUNT = 3` is the root of the remaining junk — the median card in the
+> pool appears in **14 decks**, and community-tail cards like Salt Marsh (5 decks, all 5 Dimir
+> zombie decks) are statistically indistinguishable from genuine members. Raising to ≥10 drops 38%
+> of the pool. Also open: a systematic 3-colour bias in the two new filters (31% unassigned vs 3-6%
+> at equal popularity, because neither filter is legality-aware), and symNMF's k is unvalidated
+> (6.3-B's task-driven metric suggests ~1,200, not 200).
+
 ### Task 6.4 — Functional role classification
 Depends on: 5.5.
 
