@@ -10,8 +10,19 @@ Project/cards.json
 /.jupyter
 .jupyter_ystore.db
 CONTEXT.md
-/Project/.ipynb_checkpoints
+.ipynb_checkpoints/
 *.parquet
 cards.json
 scryfall_fields.json
 Project/scryfall_fields.json
+
+# Course-supplied material and other students' example reports - not ours to republish
+Project/Report/Examples/
+Project/Report/Images/
+Project/Report/Archive/
+Project/Report/Data Project - Instructions.pdf
+Project/Report/Data Project - Tips and Pitfalls.pdf
+
+# LibreOffice/Office lock files
+.~lock.*#
+~$*

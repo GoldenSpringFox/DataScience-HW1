@@ -732,6 +732,88 @@ Depends on: 5.5.
 > well-known cards with expected roles as a test — report accuracy and tagger-vs-heuristic
 > agreement. 📊 Devlog entry (accuracy numbers, disagreement examples).
 
+> ✅ **Done 2026-08-16** — full detail in `docs/devlog/6.4-functional-roles.md`.
+> `edhcut/analysis/roles.py` → `data/kb/dev/roles.parquet`, all **31,830** cards (the whole
+> commander-legal pool, not the 6.3 graph pool — a role is well-defined for a card in zero decks
+> and the recommender must answer for any pasted decklist).
+>
+> **Deviation from the prompt, decided from the data**: roles are **weighted-scored, not
+> first-match-wins**. Real cards carry several signals at once (Path to Exile is tagged `ramp`,
+> `tutor` *and* `spot-removal`), so each role accumulates a score and the argmax wins, with the
+> runner-up becoming the secondary for free. Three consequences worth knowing: only **anchor**
+> tags get real weight (5.5's ancestor expansion means Cyclonic Rift carries ten `removal-<type>`
+> tags — summing them would let verbosity beat meaning); **negative weights** cancel a parent tag
+> where a child contradicts it (`tutor-land-to-battlefield` -3.0, because fetching a land is ramp,
+> not tutoring); and the two layers combine by **max, not sum** (a `draw`-tagged card whose text
+> says "draw a card" is one piece of evidence seen twice — summing made Mind Stone a draw spell).
+>
+> **`land` is a type-line override**, so a functional land's role becomes its *secondary* (Bojuka
+> Bog → land/graveyard_hate, Ancient Tomb → land/ramp). Task 6.6's role quotas depend on this: a
+> land that also ramps must not be counted out of the mana base.
+>
+> **The bug worth remembering**: a lone 0.5-weight corroborator could become a primary role, which
+> made every anthem effect a `wincon` (843 cards vs the ~190 its anchors cover) while the spot-check
+> sat at 98% — no labeled set of *famous* cards can catch a bug that only affects cards with no
+> strong signal. Fixed with a `MIN_ROLE_SCORE` floor. Fifth confirmed instance of this project's
+> standing "eyeball the real output" lesson.
+>
+> **Vocabulary revised three times the same day after user review of the real output** (devlog
+> §Revision, §Revision 2, §Revision 3). Final: **18 roles**.
+> Renames: `card_draw`→`draw`, `board_wipe`→`boardwipe`, `evasion_enabler`→`evasion`,
+> `stax_tax`→`stax`, `ramp`→**`mana_acceleration`** (rituals and cost reducers read wrong as
+> "ramp"), `counterspell`→**`stack_interaction`** (broadened to copying, redirecting, granting flash,
+> granting "can't be countered", denying opponents the stack). Added **`sacrifice_outlet`**,
+> **`defensive`** (keeps *you* alive vs. `protection` keeping *your permanents* alive),
+> **`board_presence`** (token makers, lords, +1/+1 counter distributors, big bodies) and
+> **`enhancer`** (doublers, increasers, extra phases — the group the data itself surfaced as the
+> leftover in `other`). **`synergy_piece` dropped**; `other` is the only default. Cantrips are NOT
+> draw; loot/rummage/impulse are. Damage aimed at players, extra turns and extra combats are
+> `wincon`; lords are `board_presence` unless they grant evasion or scale.
+>
+> **Land destruction took three attempts and is deliberately not its own role.** It splits on
+> whether the card gives anything back: **`stax`** when it does not (Stone Rain, Wasteland, all mass
+> land destruction), **`spot_removal`** when it replaces the land (`swap-removal` — Ghost Quarter) or
+> could have hit a nonland (Acidic Slime, Beast Within). Six weights in the `stax` rule set, no
+> special-case machinery.
+>
+> **Two mechanisms the weights alone could not express**, each added for a specific card:
+> **cross-layer penalties** (a negative weight is a claim about the *card*, so it applies after the
+> layers combine — Ponder's `cantrip` penalty otherwise cancelled only the tag layer while the text
+> layer read "Draw a card." and kept the role), and **`TAG_COMBOS`** tag conjunctions (a lord is
+> `board_presence`, but `{anthem, gives-evasion}` together make a `wincon` — with plain weights the
+> only route would be a large `gives-evasion` weight firing on all ~1,000 evasion granters).
+>
+> **Three Tagger tags whose name misled**, in this task alone: `mass-land-denial` (means denial,
+> covering Winter Orb as much as Armageddon), `removal-land` (sits on every "destroy target
+> permanent"), and `tax` (means "something happens when an opponent does something" — it put Soul
+> Warden and Roaming Throne in stax at 3.0; demoted to 0.5, with `cast-tax`/`cost-increaser` as the
+> real anchors). Standing rule now: *before using a Tagger tag as a role anchor, list the cards
+> carrying it **without** the tag you assume co-occurs.*
+>
+> **Threshold lesson**: `SECONDARY_MIN_SCORE` was lowered 1.5 → 1.0 (be liberal with secondaries),
+> and that **re-audited every corroborator weight in the mapping** — `removal-creature` at 1.0 on
+> `boardwipe` had been harmless at 1.5 and instantly gave 2,597 cards a spurious `boardwipe`
+> secondary. Only the pool-wide secondary count caught it.
+>
+> **Results**: spot-check **150/150**, 58/58 held-out — a number to distrust rather than celebrate,
+> and the notebook says so: after three rounds of corrections 92 of the 150 labels come from the
+> user's own instructions, so it measures "was the instruction implemented", not generalisation. The
+> real checks were the distribution and the card grids. Agreement **74.9%** over 13,166 cards;
+> 10,709 cards (33.6%) carry a secondary. Distribution: `other` 6,950, `board_presence` 4,945,
+> `spot_removal` 3,607, `draw` 2,975, `mana_acceleration` 1,734, …, `stax` 382, `enhancer` 309.
+> 55 tests; package total 460 passed / 3 skipped.
+>
+> **One request that could not be met**: Skullclamp's secondary should be `sacrifice_outlet`, and no
+> signal exists — it carries no sacrifice tag and its text never says "sacrifice" (it kills X/1s via
+> −1 toughness). A genuine limit of tag-plus-text classification, not a tuning miss.
+>
+> **Notebook `notebooks/roles_exploration.ipynb`** — the review artifact: how the Tagger hierarchy
+> is used, the top 100 most-played cards as images with their roles, ten blocks of tricky cards, and
+> the user's own Kyler decklist by role. It carries **8 open vocabulary questions** (cantrips as
+> `draw`, rituals/colour fixing inside `ramp`, multi-target removal, graveyard tutors, pillowfort as
+> `defensive`, the lifegain bar, typal payoffs) — deliberately floated, not decided. None blocks 6.5
+> or 6.6.
+
 ### Task 6.5 — Oracle-text mining: power level, extra tags, synergy detection *(new in v2)*
 Depends on: 5.2, 6.4.
 
