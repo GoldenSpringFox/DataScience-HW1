@@ -1,0 +1,539 @@
+# A Needle in a Stack of Magic Cards
+
+**Team Members**
+- Aviv Goldstein | aviv.goldstein2@mail.huji.ac.il | aviv.goldstein
+- Shaked Ben Hamo | shaked.benhamo@mail.huji.ac.il | shaked_benhamo
+- Tomer Titinger | tomer.titinger@mail.huji.ac.il | tomer.titinger
+
+**Links.** Demo video: TODO · Live app: TODO · Code: [github.com/GoldenSpringFox/DataScience-Project/tree/main/Project/EDHCut](https://github.com/GoldenSpringFox/DataScience-Project/tree/main/Project/EDHCut)
+
+<!-- BUDGET: 6 pages of text = ~3,000 words. Figures do NOT count (a separate no-images PDF is required).
+     Domain+Data ~500 | Ch1 ~700 | Ch2 ~750 | Ch3 ~650 | Future Work ~250 | Conclusion ~150
+     FIGURES: 11-13 total, 3-4 per chapter. Number and caption every one, and interpret each in prose
+     (the text must survive having every figure stripped out).
+     CONVENTIONS from the graded examples: name every parameter with a justification; 2-4 named card
+     examples per chapter; one sentence per chapter on why that chart type was chosen; state explicitly
+     how we ruled out spurious findings; close each chapter with an "Algorithms: ... Tools: ..." footer. -->
+
+---
+
+## Domain
+
+<!-- ~200w. DRAFTED. -->
+
+*Magic: The Gathering* is a trading card game with over 30,000 mechanically unique cards! The most popular
+way to play magic is the **Commander** format, which imposes three rules on the player while they are building
+a deck. It must include exactly **100 different cards** (excluding basic lands); it is led by one **commander**, a card that sits outside the other 99 and restricts them - every card in the deck must draw its colors from a subset of the commander's five-color *color identity*; Within that color identity, **any card ever printed** may be put in the deck (barring ~50 banned cards).
+
+A natural consequence of the abundance of options, is that players struggle to **cut** cards out of their deck.
+There are always shiny new cards that they want to add to the deck, but its never fun to take out a good card to make space. Part of making good cuts requires knowing which cards are only good *together*: a **synergy package**, and finding those packages automatically is the problem this project tackles.
+
+## Data
+
+<!-- ~300w. DRAFTED. ** FILE SIZES NEED VERIFYING - carried over from the old docx, rounded there. ** -->
+
+We assembled four sources into one SQLite database (185 MB; ~560 MB with derived matrices).
+
+| source | what it gives | size |
+|---|---|---|
+| **Scryfall** | every printed card: cost, type, oracle text, color identity, ~100 fields | 31,830 cards, 20 MB |
+| **Scryfall Tagger** | crowdsourced mechanic labels (themes, tribes, actions) - our only ground-truth-ish account of what a card *does* | 376,800 tags over ~950 types, 55 MB |
+| **Archidekt** | user-submitted decklists | 13,207 decks over 1,001 commanders, 110 MB |
+| **EDHREC** | aggregate metagame statistics and commander themes | 0.5 MB |
+
+*Tagger labels are deliberately **held out of every clustering step**, which lets us use them later as
+an independent check rather than an input.
+
+A couple of notes on the data: There are millions of decklists which at 2s/d would take a couple of months to scrape, so we only took a sample. a bredth sample of the top 1000 most played commanders according to EDHREC, with ~10 decks per commander, and a depth sample of ~1000 decks on 5 specific commanders. To balance this discrepancy during analyses, we apply an inverse-probability deck weighting. we should also note that most of the people who play the game don't upload their decks to this site, and decks on the site aren't necessarily played in real games (could just be brainstorms) so there's a built in bias.
+
+About the cards themselves, card popularity falls off logarithmically with a thin tail.
+
+![Card popularity](Images/fig1_card_popularity.png)
+*Figure 1 - Every card in the analysis pool, ordered by how many decks play it.*
+
+the median card in the analysis pool appears in only 14 decks, so to get sufficient evidence we require a card to appear in at least 3 decks (18,979 of 31,830 survive), and after the filtering described in Chapter 1, 16,026 make it into the final graph. Another deliberate design choice we made is that the **commanders themselves are absent** from the decklist records - the single most defining card of each deck contributes nothing to co-occurrence. Otherwise the graphs would center around the 1000 commanders instead of finding the inner communities and themes between decks. The remaining biases are mechanical rather than sampling, and dismantling them is the subject of Question 1.
+
+---
+
+## 1. Two-card combo - measuring synergy between cards
+
+<!-- ~750w. DRAFTED. Source: docs/devlog/6.1, 6.1b, 6.3d. -->
+
+#### Problem Description
+
+Which pairs of cards actually belong together? Sharing a single deck is weak evidence of actual synergy: the color-identity rule alone guarantees that two white cards meet far more often than a white card and a blue one. Not to mention a pre-constructed deck ships 100 cards together, and staple cards like *Sol Ring* sits in 82.5% of decks and therefore correlate with everything. We needed a number that sees through all of these factors.
+
+#### Our Solution
+
+We turned the 13,207 decklists into a graph of cards. Each card is a node, each surviving pair is an
+edge, and an edge's weight is our estimate of how strongly those two cards want to be in a deck
+together. Everything in Question 2 is built on this graph, so a lot of our effort went here.
+
+We scored every pair with three association metrics, each fixing a flaw in the one before:
+
+1. **Co-occurrence** - how many decks contain both cards. Simple, and dominated by card and deck popularity.
+2. **Lift** - `(joint·N)/(count_A·count_B)`: how many times more often two cards meet than they would
+   if decks were assembled at random. It reads directly - "4× more often than chance" - but it treats
+   two decks and two hundred decks as equally convincing.
+3. **t-score** - `(observed − expected)/√observed`. Instead of asking how far above chance a pair
+   sits, it asks how *well-evidenced* that gap is, so a handful of decks can no longer produce a
+   headline number.
+
+We also adjusted the meaning of `expected` in t-score. The naive version divides by all ~13,000 decks, which quietly assumes any card could have gone into any deck. We instead divide by the decks *legally able* to run each card, so two white cards are credited only for meeting more often than two white cards normally do.
+
+**We derived the following formula for our synergy score: `t-score × log(1 + lift)`.** The t-score
+carries the evidence, the lift carries the effect size, and neither alone was good enough.
+
+![Each metric's answer for one card](Images/cards1_metric_comparison.png)
+*Figure 2 - Thornbite Staff untaps a creature every time a creature dies, so what it wants is creatures with abilities worth using twice, or other untappers. Co-occurrence answers Sol Ring and Mountain; lift answers cards played in a handful of decks; t-score answers generic equipment and two lands. Only the synergy score finds the mechanic - every card it returns reads "untap target creature".*
+
+A score only ranks pairs, though; it never says which pairings are relationships at all. That
+decision turned out to be impossible pairwise (see Results), so we make it **structurally**: an edge
+survives only if the two cards keep the same company, measured as the Jaccard overlap of their
+neighbour sets. The two jobs are separate - the score says *how strong*, the gate says *whether it
+is real*.
+
+#### Evaluation
+
+**Evaluation Criteria**
+
+This was mainly evaluated using our domain knowledge of how magic works. We hand-labelled a keep/drop set of real pairs. A metric works if it keeps pairs a player would call synergy and drops pairs that merely share a
+color or a shelf. Specifically we expect generic staple cards (ones that are generally useful and don't need synergies to work) to score low with any other card. inversly cards that want thing A should score very high with cards that supply thing A, but not with cards that only supply thing B (unless A and B are directly related). Also niche cards that are almost never played shouldn't score too high with anything, since we don't have enough evidence for a strong claim.
+![Hand-labelled pair examples](Images/cards2_keep_drop.png)
+*Figure 3 - What we labelled and why. The first three pairs need each other to function; Abrade and Lightning Bolt do the same job, so they are substitutes rather than partners; Command Tower and Beast Within share decks only because both are widely played.*
+[Friends - show our test set, and ask them to rate how synergistic they are]
+[Friends - show pairs our synergy score rates highly/poorly, vs baseline random pair rating generator]
+
+**Setup**
+
+All three metrics are built over the same 13,207 decks by `edhcut.analysis.cooccurrence`, with decks
+weighted by inverse commander probability and cards that show in pre-constructed decks are down-weighted by how often players actually cut them. 18,979 of 31,830 cards clear the 3-deck floor, and 16,026 survive into the graph.
+
+**Results & Visualization**
+
+Each metric fails in its own direction, and the failures are what built the final formula.
+
+![Lift's top pairs](Images/fig2_lift_fails.png)
+*Figure 4 - The four highest lift scores in the entire corpus.*
+
+**Lift is disqualified outright.** Its best pairs in 13,207 decks all sit at exactly **4,402** - the
+score two cards get when both appear in 3 decks and never apart. Over 10,000 pairs clear lift 150 on
+fewer than 12 decks each. For comparison, the strongest genuine combo we have, *Thassa's Oracle* with
+*Demonic Consultation*, scores 64.
+
+![t-score's top pairs](Images/fig3_tscore_fails.png)
+*Figure 5 - The four highest t-scores in the corpus, once basic lands are set aside.*
+
+**t-score fails in the mirror direction.** It kills the coincidences dead - all three score under
+**1.8**, below every real pair - but its own top four is *Sol Ring*, *Arcane Signet* and *Command
+Tower* in every combination, cards in 4,000 to 10,900 decks that go in everything. A tiny relative
+excess on a huge count is still many standard deviations.
+
+![The two scores on the labelled pairs](Images/fig4_product_works.png)
+*Figure 6 - Our 22 hand-labelled pairs under t-score and under the product. A strip plot is the right display because the only question is whether the three groups occupy separate regions.*
+
+**The product buys most of the difference back.** Under t-score, **6 of the 9** generic pairs outscore
+the weakest real pair; multiplying by `log(1 + lift)` cuts that to **2 of 9**. The cost is honest and
+visible: one coincidence, *Sheltering Ancient* + *Tolarian Contempt*, climbs back above the weakest
+real pair. Neither score separates the groups on its own, which is what the gate is for.
+
+![The Jaccard gate](Images/fig5_jaccard_gate.png)
+*Figure 7 - The same pairs by how much their neighbourhoods overlap, with the 0.03 gate marked.*
+
+**The gate decides what the score cannot.** At 0.03 it keeps all 10 synergy pairs and drops 7 of the
+9 non-synergy pairs. What survives is one category: *Abrade* + *Lightning Bolt* (0.218) and *Swords
+to Plowshares* + *Loran of the Third Path* (0.065). Two red removal spells genuinely do keep the same
+company, so this is not a measurement failure but a different relationship - they are *substitutes*
+rather than partners, which is what Question 3 takes up.
+
+![The staple detector](Images/fig6_staple_detector.png)
+*Figure 8 - Play rate against a card's strongest lift to anything. The shaded box is the exclusion rule.*
+
+Generic staples pass every filter we built, so we caught them by a different property: no
+above-chance affinity to *anything*. *Sol Ring*'s strongest lift in the entire format is **1.13**,
+against *Lion Sash*'s **104.6**. Thresholding at `max lift < 3.5 and play rate ≥ 10%` selects exactly
+12 cards and spares *Evolving Wilds* at 4.84 - and it only works on the gated graph, since before
+gating it finds just 6 of the 12.
+
+Finally, the color correction fires where we want and nowhere else. Across 13 hand-classified pairs,
+generic same-color pairs collapse by **72-92%** - *Swords to Plowshares* + *Felidar Retreat* falls
+from t = 8.2 to 0.6 - while real synergy loses at most a few percent. The three colorless pairs move
+by **0.002-0.12%**, which is the algebraic check passing: a colorless card has no legality
+restriction, so the corrected formula must reduce to the uncorrected one, and any real movement there
+would have been a bug.
+
+**Impediments**
+
+Most of our parameters are mitigations rather than free choices, so they are collected here:
+
+| problem | what we did |
+|---|---|
+| Thin evidence - the median card is in 14 decks | require a card in ≥3 decks; below that, a package and a coincidence look identical |
+| Graph too dense to cluster | keep each card's 15 strongest edges, union-symmetrised so a niche card keeps its link to a popular one (exact number is arbitrary) |
+| Borderline edges | Jaccard gate at ≥ 0.03; we read the 0.02–0.03 band by hand and found it almost entirely staple-to-staple noise, 82% of it linking unrelated communities |
+| Staples merging unrelated clusters | exclude the 5 basic lands and the 12 detected format staples as graph nodes |
+| Pre-constructed decks - buy one, swap ten cards, and you have donated thousands of meaningless pairs | down-weight individual precon cards by how often players actually cut them |
+
+**Tools**
+
+Algorithms: *lift, t-score, color-conditioned null model, Jaccard neighbourhood overlap.*
+
+Libraries: *pandas, numpy, scipy, SQLite.*
+
+---
+
+## 2. "This would go great in my dragon deck!" - recovering card packages from co-occurrence
+
+<!-- ~850w. DRAFTED. Source: docs/devlog/6.3, 6.3c, 6.3d; notebooks symNMF_communities.ipynb, louvain_communities.ipynb. -->
+
+#### Problem Description
+
+A good magic deck picks a theme and maybe a subtheme, and deliberately adds cards from **packages** related to these themes. since you draw only a portion of the entire deck in each game, its important to have redundant synergies, and packages promise you that cards within them work well together. So: can those packages be recovered from co-occurrence alone, by a system that doesn't know magic and has never read a card? And once we identified them, does a card belong to one package or to several at once?
+
+#### Our Solution
+
+We ran community detection on the synergy score graph from Question 1 (16,026 cards, 158,294 edges). We used and compared two algorithms:
+
+1. **Louvain** gives a **hard partition**: every card lands in exactly one community, chosen to
+   maximise modularity. It is fast, deterministic enough, and easy to reason about.
+2. **symNMF** gives a **soft** one. It factorises the graph as `S ≈ H·Hᵀ` with `H ≥ 0`, so each row
+   of `H` is a card's membership spread across `k` topics. A card can belong to three packages with
+   weights, rather than being forced into the best one.
+
+To test if the communities make sense in the context of known themes, we labeled each
+community with mechanic tags from **Scryfall Tagger**, scoring every tag by `share × log(1 + lift)` and
+requiring it to be both common (in ≥10% of the community) and distinctive (lift ≥ 8 over at least 4
+cards). Both halves are necessary: `share` alone picks vacuous tags that every card carries, `lift`
+alone picks freak tags that happen to sit on four cards. **Those tags never enter the clustering.**
+They are a completely independent description of what each card does, so if they line up with
+communities built purely from "these cards appeared in the same deck", that agreement means
+something.
+
+| parameter | value | why |
+|---|---|---|
+| topics `k` | 200 | chosen to be comparable to Louvain's community count on the same graph |
+| membership floor | share ≥ 10%, at most 5 topics | below a tenth of a card's mass, membership is noise |
+| k-core floor | k = 4 | a card must have 4 edges *inside* a community to belong to it; tested against a hand-labelled set, it removed 11 of 12 cards we had flagged as misplaced and 0 of 12 known core members |
+| seed | 42, fixed | symNMF is non-deterministic - see Evaluation Criteria |
+
+#### Evaluation
+
+**Evaluation Criteria**
+
+The system is given no game knowledge, so success means the packages it finds are recognisable
+*afterwards*. Three checks, in increasing strictness.
+
+First, the held-out tags have to name the communities specifically. A community that gets a sharp
+mechanical label is a real package; one whose best tag is weak gets labelled `(generic)`, which
+doubles as an automatic detector for the low-quality communities.
+[Friends - ask them to match tags to communities, see if they agree with our algorithm]
+
+Second, the result has to beat chance. Cards in the same community tend to share colors, but colors
+are also the format's legality rule, so we compare every community's color purity against
+same-size random draws from the same pool.
+
+Third, it has to be stable. symNMF starts from a random initialisation, so a result that only exists
+at seed 42 is not a result. We refit at five seeds and compared, using a **degree-preserving
+rewiring** of the same graph as the floor - same cards, same number of connections each, structure
+destroyed - because a stability number means nothing without knowing what a structureless graph
+scores.
+
+**Setup**
+
+The graph enters clustering with 16,026 nodes and 158,294 edges, median degree 14. symNMF converges
+in 194 iterations, 24 seconds. Louvain produces 244 communities against symNMF's 200. We also carry
+a standing guard: for each of our over-sampled commanders we take its *signature* cards - the ones
+in at least half of that commander's decks - and check what share of them land in a single
+community, so an oversampled commander cannot quietly become a "package".
+
+**Results & Visualization**
+
+The communities are real, and they are legible. Level-0 output includes Equipment, Landfall, Extra
+Turns, Shrines, Cascade, Deserts, Allies and twenty-odd typal packages, all named by tags the
+clustering never saw.
+
+![The community graph](Images/fig10_community_graph.png)
+*Figure 9 - The 14 largest named packages. Cards are pulled together by edge weight, so distance on the page is synergy. A force-directed layout is the right chart here because the claim is about grouping, and grouping is the thing it makes visible.*
+
+Our own title case is the best illustration. Dragons do not come out as one package but as **three**,
+and the split is not by creature type - it is by how the deck plays. Community 63 (79 cards) is the
+aggressive Rakdos core, Dragon Tempest and Scourge of Valkas. Community 87 (62 cards) is the big
+multicolor ramp shell, Lathliss and Atarka and Klauth. Community 137 (41 cards) is Grixis control,
+Crux of Fate and Silumgar and Junji. Asking "would this go great in my dragon deck?" turns out to
+have three different answers.
+
+![The three dragon packages](Images/cards3_dragons.png)
+*Figure 10 - The most-played members of each dragon package.*
+
+The soft/hard difference is the sharpest finding. Cards average **1.45** memberships and **41%
+belong to more than one community**, which is structure a hard partition cannot represent at all.
+*Mondrak, Glory Dominus* is the clearest case. It doubles your tokens, it is an expensive staple that's played in high-power decks, and it is a Phyrexian - and the model independently places it 47% in the
+token payoffs, 22% among the format's powerful staples and 21% in Phyrexian typal. One package per
+thing the card does, recovered without reading a word of it.
+
+![Mondrak's three packages](Images/cards4_multi_membership.png)
+*Figure 11 - Mondrak and the three packages it belongs to, with the share of its membership in each.*
+
+![Mondrak's connections across three packages](Images/fig11_multi_membership_graph.png)
+*Figure 12 - Mondrak's own connections, drawn over the graph. Everything it does not connect to is greyed out. The three packages barely touch each other, which is why no single label can describe it.*
+
+A hard partition has to pick one of those three and discard the other two.
+
+![Packages per card by EDHREC rank](Images/fig9_packages_by_popularity.png)
+*Figure 13 - The 10,000 most-played cards, in bins of fifty by EDHREC rank, against the number of packages they belong to. Past rank 10,000 the line stays flat at about 1.4.*
+
+The effect is strongest exactly where it matters: the top 2,000 cards average **2.10** packages
+against **1.52** at rank 10,000, because a card reaches that many decks precisely when several
+different strategies have a use for it. Those popular, multi-purpose cards are the ones a player
+actually agonises over cutting, and they are the ones a hard partition describes worst.
+
+Color purity is **56.6%** across the 200 communities, against a same-size random null of **19.4%** -
+so the structure is far from a color artifact, though colors clearly contribute. The commander guard
+holds: Krenko's signature cards are 72.4% concentrated, Kyler's 41.7%, Yenna's 39.3%.
+
+![Color purity against the null](Images/fig7_color_purity.png)
+*Figure 14 - How color-consistent each community is, against same-size random draws from the same pool of cards.*
+
+The seeds agree too. We refit the whole thing at five different random seeds, and on average
+**76%** of the community structure is reproduced exactly. On the rewired graph, where we destroyed
+the structure but kept every card and every connection count, the same measurement gives **43%** -
+so most of what we are seeing is in the data rather than in the starting point.
+
+**Impediments**
+
+We tried several methods before landing on **symNMF** with the current symmetry metric.
+**Girvan-Newman** was our first attempt but cost roughly 65 minutes per subgraph, which made it unusable at this scale. **k-clique percolation** ignores edge weights entirely, so it cannot distinguish a t-score of 30 from one of 2; on our graph it percolated into a single **15,479-node blob** and returned barely more than one
+community per card. An earlier **NMF** topic model produced 40 topics that never read as archetypes.
+
+Two more subtle ones. **Degree normalisation** improved every metric we could measure but produced
+visibly worse communities - hyper-specific small ones and incoherent large ones. A **3-color bias survives**: controlling for popularity, 31% of three-color cards end up in no community at all, against 3-6% for every other color count. A three-color card is only legal in decks whose commander covers all three, and that pool spans many unrelated archetypes, so its partners spread too thin to clear the k-core floor.
+
+**Tools**
+
+Algorithms: *symNMF, Louvain, k-core, modularity, adjusted Rand index.*
+
+Libraries: *networkx, scipy, numpy, ipysigma.*
+
+---
+
+## 3. Reading the card explains the card - text similarity vs. co-occurrence
+
+<!-- ~850w. DRAFTED. Source: docs/devlog/6.2, 6.4; notebooks embeddings_exploration.ipynb. -->
+
+#### Problem Description
+
+Question 2's model never read a single card. This one reads nothing else. Both produce a list of
+"cards like this one", so the obvious question is whether they produce the *same* list - and if not,
+what the difference is. The answer turns out to be a distinction the project needed anyway: a
+recommender that suggests a **replacement** for a card is doing something completely different from
+one that suggests what to build **around** it. Cutting a card raises the first question; keeping it
+raises the second.
+
+#### Our Solution
+
+We built a second similarity measure that never looks at a decklist. Every card becomes a vector made
+only of what is printed on it, and cards are compared by the angle between those vectors. One
+algorithm does the work:
+
+1. **TF-IDF + truncated SVD** - `TF-IDF` scores a word by how often it appears on *this* card against
+   how many cards use it at all, so a word every card carries counts for almost nothing and a rare one
+   counts for a lot. That gives each card a vector with one entry per word in the game's vocabulary,
+   far too many to compare directly, so `SVD` compresses it down to 64 numbers that keep the
+   directions the cards actually differ along.
+
+A Magic card looks busy, but it holds only five things worth reading, and every one of them sits in
+the same place on every card ever printed: a **name**, a **mana cost** to play it, a **type line**, a
+box of **abilities** saying what it does, and for creatures a **power and toughness**. The art, the
+italic flavour text and the set symbol are decoration, and our model ignores all of it.
+
+![The parts of a Magic card](Images/card_anatomy.png)
+*Figure 15 - The five parts of a card our model reads, on a card that is also a member of Question 2's dragon package. The flavour text and set symbol are ignored.*
+
+Those four kinds of information matter unequally, so each goes into its own block, is scaled to the
+same length, and is then weighted:
+
+| block | weight | why |
+|---|---|---|
+| rules text | 0.6 | what the card actually does, and the only block that describes behaviour |
+| type line | 0.15 | creature vs artifact vs enchantment separates cards that read alike but play differently |
+| mana cost | 0.15 | a one-mana and a six-mana version of the same effect are not replacements for each other |
+| power / toughness | 0.1 | creatures only; redistributed onto the other blocks otherwise |
+
+Two details do most of the work. We wrote a tokenizer that keeps mana symbols such as `{T}` and `{G}`
+as words, since the standard one discards anything shorter than two characters and would throw away a
+mana ability entirely. And the type line gets its **own** block rather than being pooled with the
+rules text: on a card whose text is one short sentence, a single shared word like "Human" otherwise
+outweighs the ability itself.
+
+Separately, we classified every card into one of **18 functional roles** - removal, ramp, draw,
+boardwipe and so on - two independent ways: from crowdsourced mechanic tags, and from regular
+expressions over the card's own rules text. That gives us a way to *test* whether "cards that do the
+same job" behave differently from "cards that need each other", rather than just asserting it.
+
+#### Evaluation
+
+**Evaluation Criteria**
+
+Success is that the text measure returns cards a player would accept as **replacements**, and that it
+demonstrably answers a different question from co-occurrence.
+
+The first half is judged by reading the output on real cards, which is the only honest test for a
+similarity measure with no ground truth. We also keep a standing check: *Cultivate*'s nearest
+neighbour must be *Kodama's Reach*. They are the same card with a different name, so any method that
+misses that is broken - and both of our measures find it independently.
+
+The second half is measurable. Using groups taken from Scryfall Tagger, which never entered either
+model, we compare **functional categories** (all the boardwipes) against **synergy packages** (the
+landfall cards) on both axes at once. If the two signals really answer different questions, the two
+kinds of group should separate on one axis and not on the other.
+
+[Friends - ask them to name a replacement for a card and a partner for it, and see which of our two lists matches which question]
+
+**Setup**
+
+Text vectors cover all 31,623 commander-legal cards - every card, whether or not anyone has ever put
+it in a deck, which is exactly what co-occurrence cannot do. The role classifier runs over all 31,830
+cards and its two layers can both read 13,166 of them. For the category-versus-package comparison we
+used eleven Tagger groups and every pair among each group's fourteen most-played members; sampling at
+random from a 4,600-card tag mostly returns two obscure cards that have never met, which measures
+nothing.
+
+**Results & Visualization**
+
+The text measure finds replacements, and the clearest way to see it is beside the other list.
+
+![Skullclamp's two neighbour lists](Images/cards5_substitutes_vs_complements.png)
+*Figure 16 - Skullclamp's four nearest cards under each signal. Text returns four other cheap Equipment - things you could play instead. Co-occurrence returns the sacrifice engine it is played with, and not one of them is an Equipment.*
+
+Both lists are correct answers to different questions. Every card in the text list is a cheap
+Equipment that buffs a creature; every card in the co-occurrence list is part of the sacrifice engine
+*Skullclamp* draws cards off. A player asking "what do I put in this slot instead?" wants the first; a
+player asking "is this card doing anything here?" wants the second.
+
+The two signals are close to unrelated, and the geometry shows why.
+
+![The text space](Images/fig13_text_space.png)
+*Figure 17 - The text space projected down to two dimensions. The inset zooms in on Skullclamp, where its text neighbours are packed so tightly they are invisible at full scale.*
+
+Laid out purely by what cards say, *Skullclamp*'s eight nearest cards by text sit at cosine similarity
+**0.97 and above** - so close together that they occupy one point on the map and need an inset to be
+seen at all. The eight cards it is actually *played* with are scattered to opposite corners of the
+same picture. Neither space is wrong; they are not measuring the same thing.
+
+**Functional categories are not synergy packages, and the gap is not subtle.** Across eleven groups,
+the five functional categories sit at a median lift of **0.99** - which is to say *exactly chance*, as
+though the game had dealt them out at random - while the six synergy packages sit at **9.15**. Not one
+category clears 2.5x and not one package falls below 3.5x.
+
+![Lift within each group](Images/fig12_group_lift.png)
+*Figure 18 - Every pair among each group's fourteen most-played cards, by how much more than chance the two are played together.*
+
+Text similarity cannot make that distinction at all. The groups that read most alike are goblins (a
+package, 0.78) and counterspells (a category, 0.71); the two that read least alike are boardwipes (a
+category, 0.11) and lifegain (a package, 0.29). Knowing that two cards read the same tells you nothing
+about whether they belong in a deck together.
+
+This also settles two things the earlier questions left open. *Starfall Invocation* ended up in no
+community at all because every other boardwipe had been eliminated from its neighbourhood during
+sparsification - not a filter failure, but the filter working, since a boardwipe's real relationships
+are to the cards it protects. And *Abrade* and *Lightning Bolt* survived every filter in Question 1
+because two red removal spells genuinely do keep the same company without ever needing each other.
+
+One last thing the text space told us, which is really a fact about the game rather than about our
+model. Magic writes in its own dialect, and it is a narrow one.
+
+![What Magic's rules text is made of](Images/fig19_oracle_wordcloud.png)
+*Figure 19 - Every word in the rules text of all 31,491 commander-legal cards, sized by how often it appears across the whole game.*
+
+The word *creature* appears on **69.4%** of all cards, *target* on 39.4%, *control* on 30.7% and
+*turn* on 29.5%. These are the words a card is obliged to use to say anything at all, and a standard
+English stopword list - which strips "the" and "of" - leaves every one of them untouched. So a real
+share of what our text vectors measure is vocabulary the entire game shares rather than anything
+specific to the card in front of them, which is the deeper reason terse cards came out so badly.
+
+**Impediments**
+
+**A land that taps for white and a creature that taps for white have almost the same rules text.**
+Early on, 14 of *Avacyn's Pilgrim*'s 15 nearest cards were lands. No amount of statistics can discover
+that a land is never a replacement for a spell - a Commander deck runs a fixed ~37 lands regardless of
+what else is in it - so we encoded that boundary directly, and share the same filter with Question 1.
+
+**Terse cards carry almost no signal.** A vanilla creature's rules text is one or two words, so
+whichever words survive dominate its vector completely. This is why the type line had to be kept
+separate from the rules text, and it remains a real limit rather than a solved problem: for the
+plainest cards, text similarity is mostly reporting mana cost and creature type.
+
+**Most pairs of cards have never met.** Our first pass at the category-versus-package comparison
+sampled pairs at random and returned a median lift of zero for almost every group - not because the
+groups are unrelated, but because two cards drawn at random from a 4,600-card tag are usually two
+obscure cards that share no deck at all. Restricting to each group's most-played members is what made
+the comparison mean anything.
+
+**Text similarity has no idea what a card is worth.** Two cards can read almost identically and be
+separated by a decade of power creep, and the vector cannot tell. That is the single biggest reason we
+would not ship replacement suggestions from text alone.
+
+**Tools**
+
+Algorithms: *TF-IDF, truncated SVD, cosine similarity, t-SNE, regex classification.*
+
+Libraries: *scikit-learn, numpy, pandas.*
+
+---
+
+## Future Work
+
+**Question 1 - measuring synergy.** Each confounder we removed was handled on its own; we never
+measured how much of the raw co-occurrence signal each one accounts for. A decomposition would say
+whether color legality or product shells or plain popularity does the most damage, and would tell a
+future version where to spend its effort. The structural gate also deserves competition: neighbourhood
+overlap was the first structural statistic we tried and it worked, which is not the same as it being
+the best one.
+
+**Question 2 - finding packages.** The number of packages, 200, was chosen to be comparable to what
+the hard partition produced, and the evidence suggests it is too coarse: a granularity sweep peaked
+at roughly 1,200 groups. Running that properly would cost about half an hour per fit, and would tell
+us where a package stops being an archetype and starts being noise. Two known biases also remain
+fixable rather than fixed - the gate and the membership floor know nothing about color legality, which
+is why 31% of three-color cards end up in no package at all, and raising the three-deck floor to ten
+would remove most of the remaining chaff at the cost of genuinely narrow cards.
+
+**Question 3 - reading cards.** The vocabulary in Figure 19 is the clearest lead. Our text model
+treats rules text as English when it plainly is not, so the obvious next version is built for Magic
+specifically: its own stopword list, and a decomposition fitted to this dialect rather than to
+English, so that all 64 dimensions are spent on what separates cards instead of on what every card is
+obliged to say. The other experiment we would run is to predict a card's package from its rules text
+alone. That turns Question 2's output into labels and Question 3's vectors into features, and
+because the two signals are close to independent, the accuracy would be a real measurement of how much
+of a deck's structure is legible from the cards themselves.
+
+**The tool this was all for.** The knowledge base exists to power a cut recommender: score each of a
+deck's 99 cards by how weakly it attaches to the packages that deck is built around, and suggest the
+loosest ones. What makes that testable is that ground truth already exists in our data. Thousands of
+our decks began as a preconstructed product, so we can see **which cards real players actually cut**
+when they upgraded one - and check whether our score would have cut the same ones.
+
+## Conclusion
+
+Three questions, one answer that kept getting sharper. Co-occurrence between cards is mostly artifact:
+the format's own legality rules, the products people buy, and the handful of cards that go in
+everything explain most of it, and we proved that no statistic computed from a pair of cards in
+isolation can separate the real relationships from the rest. What finally worked was to stop asking
+about the pair and start asking about the company each card keeps.
+
+What survives that filtering is genuinely structural. A system given no card text, no types, and no
+rules of the game recovered goblins, landfall, equipment and three separate kinds of dragon deck, and
+we could name them using labels it had never seen.
+
+We should be clear about what we did not do: the knowledge base is built and validated, the tool that
+would consume it is not. What we have is a thorough analysis of a dataset rather than a shipped
+product, and the analysis is where all the interesting content turned out to live anyway.
+
+## Afterword
+
+It was increadibly fun to work on this project. As someone who is both visually oriented and constantly thinking about this hobby, it's super cool seeing these connections i've been developing in my head take form on these graphs. It's incredible how simple and accessible exploring the data is these days, and i'm definitly intending to finish this tool and uploading it to the internet for other people to use. There is a widespread epidemic of EDHREC-ification, where deckbuilding data isn't accessible enough, so people go to edhrec and put in only genericly popular cards, instead of looking for cool niche synergy pieces.
+
+By the way, we found the needle! better drop it back for the next group to find:
+
+![Needle Drop](Images/needle_drop.png)
+*Figure 20 - Needle Drop.*
