@@ -1,3 +1,8 @@
+"""Graph construction and Leiden partitioning (`edhcut.analysis.communities`): the basic-land mask,
+every property `build_graph` promises (non-negative edges, per-node top-k cap, union
+symmetrisation, node exclusion, row-index remapping after zero-degree nodes are dropped), and
+that the partition recovers obvious structure and agrees with itself across seeds."""
+
 import json
 
 import numpy as np

@@ -277,6 +277,12 @@ class FlaggedDeck:
 
 @dataclass
 class SlotHarvestStats:
+    """The audit trail for harvesting one commander slot: how many candidate decks were looked at
+    and, for each rejection reason, how many fell out there (`stale_skipped`,
+    `commander_mismatch_rejected`, `invalid_size_rejected`, `fetch_failed`) before `decks_kept`
+    remained. Kept as counters rather than logged-and-forgotten so a thin slot can be explained —
+    the same numbers appear in `data/logs/archidekt_harvest_log.txt` and in the QA report."""
+
     slot_label: str
     candidates_checked: int = 0
     stale_skipped: int = 0
@@ -360,6 +366,11 @@ def _upsert_deck(
 
 @dataclass
 class DeckCardsResult:
+    """One deck's card list after name resolution, with the unresolved remainder kept explicitly
+    rather than silently dropped: a deck that loses cards to failed resolution would otherwise
+    look like a legal 100-card deck of the wrong size, and the size check is what rejects
+    genuinely broken decks."""
+
     quantities: dict[str, int]  # oracle_id -> qty, for resolved cards actually in the library
     unresolved_count: int  # distinct oracle_ids that failed resolution
     unresolved_quantity: int  # total physical card count of unresolved cards
@@ -720,6 +731,11 @@ def run(
     show_progress: bool = True,
     log_path: Path | None = None,
 ) -> list[SlotHarvestStats]:
+    """Harvest decklists for each commander slot — the long one. Per slot: search Archidekt for
+    candidate decks, reject the ones that are stale, the wrong size, or do not actually run the
+    commander, and store what survives. Every candidate, kept or not, gets a line in the harvest
+    log, so a thin slot can be explained after the fact. Resumable: decks already stored are
+    skipped without refetching, so an interrupted run is continued by running it again."""
     session = session or get_session("archidekt")
     slots = CONFIG.commander_slots if slots is None else slots
     decks_per_commander = CONFIG.decks_per_commander if decks_per_commander is None else decks_per_commander
@@ -759,6 +775,11 @@ def _commander_names_for(conn: sqlite3.Connection, commander_oracle_id: str, par
 
 @dataclass
 class MetaSampleCommanderStats:
+    """Per-commander progress for the broad metagame harvest (task 5.7): the `sample_target` this
+    commander's metagame share earns it, how many decks were already stored from an earlier run,
+    and this run's own harvest. `shortfall` is what the site could not supply — the harvest is
+    resumable, so re-running tops up rather than restarting."""
+
     slot_key: str
     name: str
     sample_target: int

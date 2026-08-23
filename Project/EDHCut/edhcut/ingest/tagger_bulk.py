@@ -187,6 +187,10 @@ def _write_ingest_log(conn: sqlite3.Connection, stats: TaggerBulkStats) -> None:
 
 
 def run(conn: sqlite3.Connection, session: RateLimitedSession | None = None) -> TaggerBulkStats:
+    """Full mechanic-tag ingest from Scryfall Tagger's `oracle_tags` bulk file. Tags form a
+    hierarchy, so each tagging is expanded to its ancestors (a card tagged "goblin-tribal" also
+    counts as "tribal") before writing; tags for cards not in `cards` are dropped. Writes replace
+    this source's rows wholesale rather than adding to them, so a re-run cannot double-count."""
     session = session or get_session("scryfall")
 
     bulk_info = get_bulk_data_info(session, BULK_DATA_TYPE)

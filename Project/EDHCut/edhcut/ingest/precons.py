@@ -115,6 +115,9 @@ def _upsert_precon(
     partner_oracle_id: str | None,
     alternative_oracle_ids: list[str],
 ) -> int:
+    """Insert or refresh one precon product row, keyed on Archidekt's own `precon_id`. Upsert
+    rather than insert so re-running the ingest updates in place — a precon's commander resolution
+    can improve once Scryfall data is fresher, and the harvest is meant to be resumable."""
     precon_id = listing["id"]
     conn.execute(
         """

@@ -1,5 +1,5 @@
 """Hierarchical decomposition of `symnmf_packages.py`'s color-corrected SymNMF packages (plan
-`docs/plans/6.3b-communities-next-iteration.md` step 3, task 6.3-B) -- the answer to that plan's
+`docs/plans/archive/6.3b-communities-next-iteration.md` step 3, task 6.3-B) -- the answer to that plan's
 Q2 ("more communities, formalized"): don't chase granularity with a wider flat `k`, recurse
 instead. Fit a small top-level split, then for each resulting topic induce the color-conditioned
 `S` on just its own member cards and split again, recursively -- many small, cheap SymNMF fits
@@ -78,6 +78,12 @@ DEFAULT_LEAF_COUNTS = [20, 40, 60, 80, 100, 150, 200, 250, 300, 400, 500, 600, 8
 
 @dataclass
 class HierarchyNode:
+    """One node of the recursive package tree. The root is `node_id` 0 with `parent_id` None; every
+    other node is one topic of its parent's own symNMF fit, so `members` is local to that node
+    (positions into the full pool, with the weight/share it earned *within* the parent split).
+    `is_leaf` means the recursion stopped here — too few cards, or the split was not stable
+    enough to keep."""
+
     node_id: int
     parent_id: int | None
     depth: int
@@ -154,6 +160,13 @@ def build_hierarchy(
     )
 
     def recurse(node_id: int, indices: np.ndarray, k: int, depth: int) -> None:
+        """Try to split one node into `k` children, then recurse into each. Three ways to stop, all
+        of which leave the node a leaf: too few cards or too deep (the guard below), a `k` the node
+        is too small to support (`this_k` scales with node size so a 30-card node is not asked for
+        20 topics), or a split whose across-seed stability misses `min_child_stability` — the
+        important one, since it is what keeps the tree from inventing structure that is not there.
+        `indices` are positions in the *full* pool throughout, so a child's members stay
+        addressable against the original matrix."""
         if len(indices) < min_node_cards or depth >= max_depth:
             return
         this_k = min(k, max(2, len(indices) // 10))
@@ -282,6 +295,7 @@ def save_hierarchy(nodes: dict[int, HierarchyNode], out_dir: Path = KB_DEV_DIR) 
 
 
 def load_hierarchy(out_dir: Path = KB_DEV_DIR) -> dict[int, HierarchyNode]:
+    """Rebuild `{node_id: HierarchyNode}` from the saved tree JSON plus the long members table."""
     members = pd.read_parquet(out_dir / "symnmf_hierarchy_members.parquet")
     tree = json.loads((out_dir / "symnmf_hierarchy_tree.json").read_text())
 

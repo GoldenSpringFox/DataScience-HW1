@@ -204,6 +204,13 @@ def train_word2vec(
     seed: int = SEED,
     workers: int = 4,
 ) -> "Word2Vec":
+    """Train skip-gram Word2Vec over decks-as-sentences (`sg=1`: predict a deck's other cards from
+    one card, which is exactly the "what is played alongside this?" question — CBOW's averaged
+    context is the wrong shape for it). A deck has no word order, so `ShuffledDeckCorpus` re-shuffles
+    each deck `shuffles_per_epoch` times per epoch and `window` is wide enough to reach well beyond
+    immediate neighbours; between them the model sees co-membership rather than an arbitrary list
+    order. `seed` is fixed and gensim is imported lazily — see the module docstring for why it is an
+    optional dependency."""
     from gensim.models import Word2Vec  # local import -- see module docstring / top-of-file note
 
     corpus = ShuffledDeckCorpus(sentences, shuffles_per_epoch=shuffles_per_epoch, seed=seed)
@@ -266,6 +273,12 @@ def build_tfidf_svd(
     stop_words: str | None = "english",
     seed: int = SEED,
 ) -> np.ndarray:
+    """TF-IDF over `texts`, then truncated SVD down to `n_components` dense dimensions (latent
+    semantic analysis). TF-IDF alone gives a vector per card that is enormous, sparse and brittle —
+    two cards that mean the same thing in different words share almost no terms; SVD collapses
+    correlated terms into shared directions, which is what makes cosine similarity meaningful.
+    `n_components` is clamped to what the matrix can support, so a small corpus (a test fixture)
+    still returns a valid, narrower space instead of raising."""
     vectorizer = TfidfVectorizer(min_df=min_df, stop_words=stop_words, token_pattern=token_pattern)
     tfidf = vectorizer.fit_transform(texts)
     n_components = min(n_components, tfidf.shape[1] - 1, tfidf.shape[0] - 1)
@@ -337,6 +350,7 @@ def _parse_stat(raw: str | None) -> tuple[float, bool]:
 
 
 def _zscore(series: pd.Series) -> pd.Series:
+    """Standardize a column, tolerating a constant one (zero std) by only centring it."""
     std = series.std()
     if not std:
         return series - series.mean()
@@ -447,6 +461,8 @@ def build_and_save(
 
 
 def load_embeddings(out_dir: Path = KB_DEV_DIR) -> pd.DataFrame:
+    """`embeddings.parquet`: one row per card, both vector spaces side by side, NaN where a card is
+    absent from a space."""
     return pd.read_parquet(out_dir / "embeddings.parquet")
 
 
@@ -463,6 +479,7 @@ def _space_columns(df: pd.DataFrame, space: str) -> list[str]:
 
 
 def _l2_normalize_rows(matrix: np.ndarray) -> np.ndarray:
+    """Unit-length rows, so a dot product is a cosine similarity. Zero rows are left alone."""
     norms = np.linalg.norm(matrix, axis=1)
     norms[norms == 0] = 1.0
     return matrix / norms[:, None]
@@ -562,6 +579,8 @@ def nearest_neighbors(
 
 
 def _resolve_card_name(conn: sqlite3.Connection, name: str) -> str:
+    """Resolve a card name to its `oracle_id` for the CLI, exiting with a clear message rather than a
+    traceback if it is unknown."""
     row = conn.execute(
         "SELECT oracle_id FROM card_names WHERE name_normalized = ?", (normalize_name(name),)
     ).fetchone()

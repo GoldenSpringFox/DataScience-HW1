@@ -1,3 +1,7 @@
+"""Card image and printing lookup: name resolution is case- and punctuation-insensitive, unknown
+cards and un-backfilled image URIs fail with distinguishable errors, and the Scryfall search URLs
+the notebooks link to are well-formed."""
+
 from io import BytesIO
 
 import pytest

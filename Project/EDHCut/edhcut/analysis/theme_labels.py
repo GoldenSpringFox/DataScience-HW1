@@ -1,5 +1,5 @@
 """Theme/tag ground-truth labels for scoring soft-clustering granularity and color bias (plan
-`docs/plans/6.3b-communities-next-iteration.md` step 1) -- the "measuring stick" the color-bias
+`docs/plans/archive/6.3b-communities-next-iteration.md` step 1) -- the "measuring stick" the color-bias
 and granularity work in later steps is scored against, built and validated *before* any new
 clustering so a metric bug can't be mistaken for (or mask) a clustering improvement.
 

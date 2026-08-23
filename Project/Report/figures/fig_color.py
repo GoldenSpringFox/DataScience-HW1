@@ -1,4 +1,9 @@
-"""Colour-conditioned null model: validation pairs, pooled vs corrected."""
+"""The colour-correction chart — how much the colour-conditioned null changes each pair's score.
+NOT used as a figure in the final writeup: the effect is quoted as numbers in Question 1 instead.
+Kept because those numbers come from here.
+
+Earlier description: Colour-conditioned null model: validation pairs, pooled vs corrected.
+"""
 import sys, sqlite3
 from pathlib import Path
 import numpy as np, scipy.sparse as sparse
@@ -32,8 +37,8 @@ STYLE = {COLOURLESS: (NEUTRAL, "colourless card involved - must not move"),
          GENERIC: (DROP_C, "generic same-colour pairing - collapses")}
 
 ci, _, _, n2r, r2n, dc = kb.load()
-pooled = sparse.load_npz("data/kb/dev/tscore_global.npz").tocsr()
-colour = sparse.load_npz("data/kb/dev/tscore_color_global.npz").tocsr()
+pooled = sparse.load_npz(kb.KB / "tscore_global.npz").tocsr()
+colour = sparse.load_npz(kb.KB / "tscore_color_global.npz").tocsr()
 
 rows = []
 for a, b, cat in PAIRS:

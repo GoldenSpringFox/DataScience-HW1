@@ -181,6 +181,11 @@ def build_graph(
 
 @dataclass
 class ResolutionResult:
+    """One row of the resolution sweep: how the partition looks when Leiden is run at this
+    `resolution` parameter. Higher resolution -> more, smaller communities. `modularity` is what
+    `best_resolution` picks on; the size columns are there to catch a partition that scores well
+    while being useless (one giant community plus a thousand singletons)."""
+
     resolution: float
     n_clusters: int
     modularity: float
@@ -214,6 +219,8 @@ def sweep_resolutions(
 
 
 def best_resolution(results: list[ResolutionResult]) -> ResolutionResult:
+    """The swept resolution with the highest modularity. Modularity is comparable across
+    resolutions here because every run is over the same graph."""
     return max(results, key=lambda r: r.modularity)
 
 
@@ -248,6 +255,12 @@ def seed_stability(
 
 @dataclass
 class CommunityBuildStats:
+    """Everything `build_and_save` learned on the way to `clusters.parquet`, returned so a caller
+    (CLI, notebook, test) can report the build without re-deriving it: how the card pool narrowed
+    (total -> basic lands dropped -> in-graph), the graph size, the full sweep, the chosen
+    resolution, and the across-seed agreement (`stability_*`, adjusted Rand index) that says
+    whether the partition is a property of the graph or of the random seed."""
+
     n_cards_total: int
     n_basic_lands_excluded: int
     n_cards_in_graph: int
@@ -334,6 +347,7 @@ def build_and_save(conn, *, out_dir: Path = KB_DEV_DIR) -> CommunityBuildStats:
 
 
 def load_clusters(out_dir: Path = KB_DEV_DIR) -> pd.DataFrame:
+    """The saved partition: one row per card, `oracle_id`/`name`/`cluster_id`/`deck_count`."""
     return pd.read_parquet(out_dir / "clusters.parquet")
 
 

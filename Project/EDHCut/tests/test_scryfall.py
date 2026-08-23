@@ -1,3 +1,6 @@
+"""Scryfall ingest: name normalisation (case, punctuation, diacritics, ligatures), the bulk-record →
+`cards` row mapping, and the multi-faced-card fallbacks for text and image URIs."""
+
 from edhcut.ingest.scryfall import (
     _image_uri,
     build_card_row,

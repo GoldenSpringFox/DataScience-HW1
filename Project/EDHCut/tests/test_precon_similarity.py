@@ -1,3 +1,7 @@
+"""Deck↔precon matching: Jaccard similarity edge cases (identical, disjoint, both empty), finding a
+precon by declared commander, partner or alternative commander, and the backfill leaving genuinely
+unmatched decks null rather than zero."""
+
 import json
 
 import pytest

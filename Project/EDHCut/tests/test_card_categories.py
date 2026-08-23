@@ -1,3 +1,5 @@
+"""The land/nonland filter shared by the association and similarity lookups."""
+
 import numpy as np
 
 from edhcut.analysis.card_categories import same_category_mask

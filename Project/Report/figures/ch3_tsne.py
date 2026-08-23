@@ -14,14 +14,14 @@ SP = Path(__file__).resolve().parent
 sys.path.insert(0, str(SP))
 import kb
 
-OUT = Path(r"C:/Aviv/University/Semester 8/Data Science/Homework - Group/Project/Report/Images")
+OUT = Path(__file__).resolve().parents[1] / "Images"   # Project/Report/Images
 plt.rcParams.update({"figure.dpi": 150, "savefig.dpi": 150, "savefig.bbox": "tight",
                      "font.size": 9, "figure.facecolor": "white", "axes.facecolor": "white"})
 TEXT_C, CO_C, GREY = "#0d7fa8", "#1b7f5e", "#ccd2d8"
 QUERY, N_NB, SAMPLE = "Skullclamp", 8, 6000
 
 ci, tscore, lift, n2r, r2n, dc = kb.load()
-emb = pd.read_parquet("data/kb/dev/embeddings.parquet")
+emb = pd.read_parquet(kb.KB / "embeddings.parquet")
 cols = [c for c in emb.columns if c.startswith(("tfidf_", "types_", "struct_"))]
 emb = emb[emb["oracle_id"].isin(set(ci["oracle_id"]))].reset_index(drop=True)
 vec = np.array(emb[cols].to_numpy(dtype=np.float32), copy=True)

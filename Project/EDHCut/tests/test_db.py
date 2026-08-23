@@ -1,3 +1,5 @@
+"""Schema creation is complete and idempotent, so re-running any ingest is safe."""
+
 from pathlib import Path
 
 from edhcut.db import TABLE_NAMES, connect

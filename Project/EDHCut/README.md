@@ -3,8 +3,15 @@
 A data-driven recommender for **Magic: The Gathering — Commander (EDH)**: given a decklist, suggest
 which card to cut. This repo holds the data pipeline, the analysis, and the exploration notebooks.
 
-**New here? Start at [§7](#7-what-to-read-first)** — it maps each of our three analysis chapters
-onto the notebook and devlog behind it. Nothing needs to be installed or run to read them.
+> **Course submission — group 34, 67978 "A Needle in a Data Haystack".** The writeup
+> (`writeup_group34.pdf`) is the account of *what* we found; this repo is *how*. Every claim and
+> figure in it is reproducible from here. If you are grading and want the shortest path:
+> [§7](#7-what-to-read-first) maps each of the writeup's three questions onto the notebook, the
+> code and the devlog behind it, and [§9](#9-where-the-code-is) maps each one onto the module that
+> implements it. The notebooks are committed **with their outputs**, so everything is readable
+> without installing or running anything.
+
+**New here? Start at [§7](#7-what-to-read-first).**
 
 ---
 
@@ -91,9 +98,15 @@ Expect **460 passed, 3 skipped**.
 
 `Project/EDHCut/data/` is gitignored — it's ~560 MB, mostly a SQLite database and derived matrices.
 
-### Option A — get the files from Aviv (recommended)
+### Option A — download it (recommended)
 
-Drop them so the tree looks like this:
+**[edhcut data.zip (450 MB)](https://drive.google.com/file/d/1KuzvmON9hQTxn7LKTKySL08ZHkqGGSkU/view?usp=drive_link)**
+— unzip into `Project/EDHCut/data/`. It contains everything the analysis reads: `edhcut.db`,
+`kb/dev/`, the raw Scryfall bulk files, the fixtures and the harvest logs. The one thing it leaves
+out is `http_cache.sqlite`, a 5.6 GB cache of raw HTTP responses that only matters if you intend to
+re-run the harvest itself.
+
+The result should look like this:
 
 ```
 Project/EDHCut/data/
@@ -191,10 +204,12 @@ and is exactly what the hard partition cannot express.
 
 ## 7. What to read first
 
-The analysis is written up as three chapters. Each has notebooks you can read in the browser and a
-devlog carrying the full design rationale, the numbers, and the alternatives we rejected.
+The writeup asks three questions. Each has notebooks you can read in the browser and a devlog
+carrying the full design rationale, the numbers, and the alternatives we rejected. §9 adds the
+module that implements each one; `../Report/figures/README.md` maps every figure in the writeup to
+the script that draws it.
 
-| chapter | the question it answers | notebooks | devlogs |
+| question | what it asks | notebooks | devlogs |
 |---|---|---|---|
 | **1. Two-card combo** | What does it mean for two cards to synergize, and can any pairwise metric tell? | `cooccurrence_metrics.ipynb`, `tscore_metric.ipynb`, `precon_exploration.ipynb` | `6.1`, `6.1b`, `5.3c` |
 | **2. "This would go great in my dragon deck!"** | Can coherent card packages be recovered from co-occurrence alone, with no knowledge of the game? | `symNMF_communities.ipynb`, `louvain_communities.ipynb` | `6.3`, `6.3c`, `6.3d` |
@@ -219,16 +234,54 @@ Project/EDHCut/
 ├── edhcut/
 │   ├── ingest/        one module per data source (Scryfall, Archidekt, EDHREC, Tagger, precons)
 │   ├── analysis/      co-occurrence metrics, communities, embeddings, roles, play rates, deck weights
-│   ├── config.py      paths + the 5-commander roster
-│   └── db.py          SQLite schema and connection
+│   ├── config.py      paths + the 5-commander roster + per-source rate limits
+│   ├── db.py          SQLite schema and connection
+│   ├── http.py        the cached, rate-limited session every fetch goes through
+│   └── images.py      card art, for the notebooks
 ├── notebooks/         all exploration, committed with outputs
 ├── docs/devlog/       one write-up per task — rationale, numbers, rejected alternatives
-├── tests/             405 tests
-└── data/              gitignored; get it from Aviv (§4)
+├── tests/             460 tests, 3 skipped
+└── data/              gitignored; download it (§4)
+
+Project/Report/
+├── report.md          the writeup source
+├── figures/           one script per figure — see its own README for the figure→script map
+└── Images/            the generated figures
 ```
 
-Most analysis modules also have a CLI, e.g.:
+Every `edhcut/` module carries a module docstring that explains what it does and, more usefully,
+*why it does it that way* — which alternatives were tried, which were rejected, and what the
+parameters were chosen against. Those docstrings and the matching `docs/devlog/` entry are the
+real documentation; this README is only the map.
+
+Most modules also have a CLI. `--help` lists the subcommands:
 
 ```bash
 venv/Scripts/python -m edhcut.analysis.cooccurrence top "Cultivate"
 ```
+
+---
+
+## 9. Where the code is
+
+For each question in the writeup, the module that implements it. Everything below lives in
+`edhcut/analysis/` and is documented at the top of its own file.
+
+| writeup | what it does | module |
+|---|---|---|
+| **Q1** Two-card combo | co-occurrence, PMI, lift, t-score, and the colour-conditioned t-score the report settles on | `cooccurrence.py` |
+| Q1 | the play-rate metric, whose denominator is "decks that could *legally* run this card" | `playrate.py` |
+| Q1 | inverse-probability weights correcting the harvest's commander imbalance | `deck_weights.py` |
+| **Q2** Card packages | graph construction (top-k union sparsification, Jaccard gate, basic-land mask) and the Leiden partition | `communities.py` |
+| Q2 | **the main result** — symmetric NMF over the colour-conditioned matrix, so a card can belong to several packages at once | `symnmf_packages.py` |
+| Q2 | the Louvain hard partition the report compares against, run on the same graph | `notebooks/louvain_communities.ipynb` |
+| **Q3** Reading the card | TF-IDF + SVD over oracle text, Word2Vec over decks-as-sentences, nearest-neighbour lookup | `embeddings.py` |
+| Q3 | 18 functional roles per card, from mechanic tags plus a text-heuristic layer | `roles.py` |
+
+Superseded but kept, because `notebooks/archive/communities_exploration.ipynb` documents the route
+to the final method: `nmf_packages.py` (plain NMF over decks × cards), `symnmf_hierarchy.py`
+(recursive refinement into a tree) and `theme_labels.py` (the label set used to score granularity).
+
+The ingest side is one module per source in `edhcut/ingest/`, each runnable as
+`python -m edhcut.ingest.<name>` and each logging its run to the `ingest_log` table; `§4 Option B`
+gives the order they run in.

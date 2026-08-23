@@ -10,7 +10,7 @@ sys.path.insert(0, str(SP))
 import kb
 from edhcut.config import CONFIG
 
-OUT = Path(r"C:/Aviv/University/Semester 8/Data Science/Homework - Group/Project/Report/Images")
+OUT = Path(__file__).resolve().parents[1] / "Images"   # Project/Report/Images
 plt.rcParams.update({
     "figure.dpi": 150, "savefig.dpi": 150, "savefig.bbox": "tight",
     "font.size": 9, "axes.titlesize": 10.5, "axes.labelsize": 9,
@@ -34,8 +34,9 @@ CAP = 12.0   # figure 11 y-axis cap; elves and zombies run past it and are label
 
 
 def load():
+    """The embeddings, roles and package memberships this module's figures all draw on."""
     ci, tscore, lift, n2r, r2n, dc = kb.load()
-    emb = pd.read_parquet("data/kb/dev/embeddings.parquet")
+    emb = pd.read_parquet(kb.KB / "embeddings.parquet")
     text_cols = [c for c in emb.columns if c.startswith(("tfidf_", "types_", "struct_"))]
     emb = emb[emb["oracle_id"].isin(set(ci["oracle_id"]))]
     vec = np.array(emb.set_index("oracle_id")[text_cols].to_numpy(dtype=np.float32), copy=True)
@@ -63,6 +64,8 @@ def sample_pairs(members, rng):
 
 
 def collect():
+    """Sample pairs from each group kind and score every one under both signals; cached to
+    `ch3_pairs.parquet` so the figures can be redrawn without re-sampling."""
     ci, lift, n2r, r2n, dc, vec, oid_row, tags, oid_of = load()
     row_of_oid = dict(zip(ci["oracle_id"], ci["row"]))
     rng = np.random.default_rng(SEED)
@@ -88,7 +91,8 @@ def collect():
 
 
 def fig_scatter(df):
-    """One point per group: does it read alike, and is it played together?"""
+    """One point per group: does it read alike, and is it played together? **Not used in the final
+    writeup** — Figure 16's card images make the same point more directly."""
     g = df.groupby(["kind", "group"]).agg(text=("text", "median"), lift=("lift", "median")).reset_index()
     fig, ax = plt.subplots(figsize=(7.4, 4.6))
     ax.axhspan(0, 1.0, color="#c2452d", alpha=0.06)
@@ -136,6 +140,8 @@ def fig_scatter(df):
 
 
 def fig_groups(df):
+    """**Figure 18.** Lift between every pair within each group, split by group kind — functional
+    categories sit at chance, synergy packages far above it."""
     order = (df.groupby(["kind", "group"])["lift"].median().reset_index()
                .sort_values(["kind", "lift"]))
     fig, ax = plt.subplots(figsize=(7.2, 4.2))
@@ -165,7 +171,8 @@ def fig_groups(df):
 
 
 def fig_role_agreement():
-    r = pd.read_parquet("data/kb/dev/roles.parquet")
+    """Role-agreement chart. **Not used in the final writeup.**"""
+    r = pd.read_parquet(kb.KB / "roles.parquet")
     both = r[r["tagger_primary"].notna() & r["heuristic_primary"].notna()].copy()
     both["ok"] = both["tagger_primary"] == both["heuristic_primary"]
     g = both.groupby("tagger_primary").agg(n=("ok", "size"), agree=("ok", "mean"))

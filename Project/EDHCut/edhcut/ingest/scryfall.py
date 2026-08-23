@@ -146,6 +146,13 @@ def can_be_commander(card: dict) -> bool:
 
 
 def build_card_row(card: dict) -> dict[str, Any]:
+    """One Scryfall bulk record -> one `cards` row (schema in `edhcut.db`). This is the whole
+    mapping from their ~100 JSON fields to the ~24 the project uses, so it is the place to look
+    for "where does this column come from". List-valued fields are stored as JSON text (SQLite has
+    no array type); `_face_field` fills in from the front face for multi-faced cards, whose
+    top-level `mana_cost`/`oracle_text`/`power`/`toughness` are absent by design; and the three
+    derived booleans (`legal_commander`, `can_be_commander`, `is_land`) are computed here so every
+    later query can filter on a column instead of re-parsing the type line."""
     prices = card.get("prices") or {}
     usd = prices.get("usd")
     type_line = card.get("type_line") or ""
@@ -280,6 +287,10 @@ class IngestStats:
 
 
 def run(conn: sqlite3.Connection, session: RateLimitedSession | None = None) -> IngestStats:
+    """Full card ingest: download Scryfall's daily `oracle_cards` bulk file, stream it line by
+    line (it is far too large to hold in memory), write one `cards` row per record and the name
+    aliases that make lookup punctuation- and face-insensitive, then log the run. Re-runnable —
+    rows are upserted, so this is how the corpus is refreshed."""
     session = session or get_session("scryfall")
 
     bulk_info = get_bulk_data_info(session)

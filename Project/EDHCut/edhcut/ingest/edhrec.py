@@ -342,6 +342,10 @@ def harvest_slot(
     build_id: str,
     commander_names: list[str],
 ) -> SlotEdhrecStats:
+    """One commander's EDHREC page: per-card inclusion rate and synergy score, plus that
+    commander's theme tags. Card names are resolved against our own `card_names` table, and the
+    ones that fail are counted rather than dropped silently. Re-harvesting replaces the
+    commander's rows instead of appending."""
     slot_label = " + ".join(commander_names)
     stats = SlotEdhrecStats(slot_label=slot_label)
     try:
@@ -412,6 +416,9 @@ def run(
     slots: list[list[str]] | None = None,
     show_progress: bool = True,
 ) -> EdhrecRunResult:
+    """Harvest EDHREC for every slot: the site-wide theme popularity table once, then each
+    commander's own card inclusion rates and themes. One `ingest_log` row per slot, so a partial
+    run is visible rather than silent."""
     session = session or get_session("edhrec")
     slots = CONFIG.commander_slots if slots is None else slots
     build_id = get_build_id(session)

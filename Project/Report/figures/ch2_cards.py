@@ -25,11 +25,14 @@ DRAGON_BLURB = {
 
 
 def top_cards(cid, n=5, exclude=()):
+    """The `n` most-played members of community `cid`, by deck count."""
     m = cards[(cards["community"] == cid) & (~cards["name"].isin(exclude))]
     return m.nlargest(n, "deck_count")["name"].tolist()
 
 
 def dragons():
+    """**Figure 10.** The most-played members of each of the three dragon packages — the same tag
+    ('dragon') three times over, split by what the decks actually do with them."""
     ids = [c for c, nm in names.items() if "dragon" in nm]
     ids.sort(key=lambda c: -(cards["community"] == c).sum())
     rows = [top_cards(c, 5) for c in ids]
@@ -44,6 +47,8 @@ def dragons():
 
 
 def multi_membership(query="Mondrak, Glory Dominus", blurbs=None, out="cards4_multi_membership.png"):
+    """**Figure 11.** One card and every package it belongs to, with its share of membership in each —
+    the overlapping membership a hard partition cannot express."""
     i = cards.index[cards["name"] == query][0]
     tops = [t for t in np.argsort(-share[i])[:5] if floored[i, t]]
     rows, labels = [], []

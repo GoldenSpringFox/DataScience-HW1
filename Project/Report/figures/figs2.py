@@ -9,7 +9,7 @@ SP = Path(__file__).resolve().parent
 sys.path.insert(0, str(SP))
 import kb
 
-OUT = Path(r"C:/Aviv/University/Semester 8/Data Science/Homework - Group/Project/Report/Images")
+OUT = Path(__file__).resolve().parents[1] / "Images"   # Project/Report/Images
 plt.rcParams.update({
     "figure.dpi": 150, "savefig.dpi": 150, "savefig.bbox": "tight",
     "font.size": 9, "axes.titlesize": 10.5, "axes.labelsize": 9,
@@ -21,17 +21,20 @@ KEEP_C, DROP_C, COIN_C, NEUTRAL, T_C = "#1b7f5e", "#c2452d", "#b8860b", "#9aa3ad
 
 ci, tscore, lift, n2r, r2n, dc = kb.load()
 counts = ci.set_index("row")["deck_count"].sort_index().values
-co = sparse.load_npz("data/kb/dev/cooccur_global.npz").tocsr()
+co = sparse.load_npz(kb.KB / "cooccur_global.npz").tocsr()
 pairs = json.loads((SP / "pairs.json").read_text())
 
 
 def _top_pairs(matrix, n, min_value=None):
+    """The `n` highest-valued pairs of a symmetric matrix, as `(row, col, value)`."""
     m = sparse.triu(matrix, k=1).tocoo()
     order = np.argsort(-m.data)[:n]
     return [(m.row[i], m.col[i], m.data[i]) for i in order]
 
 
 def fig_popularity():
+    """**Figure 1.** Every card in the pool, ordered by how many decks play it — the long tail that
+    makes a raw co-occurrence count useless on its own."""
     c = np.sort(ci["deck_count"].values)[::-1]
     fig, ax = plt.subplots(figsize=(6.6, 3.6))
     ax.plot(np.arange(1, len(c) + 1), c, lw=1.8, color=T_C)
@@ -47,6 +50,7 @@ def fig_popularity():
 
 
 def _pair_bars(ax, rows, value_fmt, color, xlabel):
+    """Horizontal bar chart of `rows` (pairs and their score) on one axes."""
     labels = [f"{r_[0]} + {r_[1]}" for r_ in rows]
     bars = [r_[2] for r_ in rows]
     y = np.arange(len(rows))[::-1]
@@ -60,6 +64,8 @@ def _pair_bars(ax, rows, value_fmt, color, xlabel):
 
 
 def fig_lift_fails():
+    """**Figure 4.** The four highest lift scores in the corpus: all coincidences between rarely
+    played cards, which is the failure mode lift has on a corpus this sparse."""
     top = _top_pairs(lift, 10)
     rows = [(r2n[i], r2n[j], int(co[i, j]), v) for i, j, v in top]
     fig, ax = plt.subplots(figsize=(7.6, 3.8))
@@ -72,6 +78,8 @@ def fig_lift_fails():
 
 
 def fig_tscore_fails():
+    """**Figure 5.** The four highest t-scores once basic lands are set aside: all generically popular
+    cards, the opposite failure mode to lift's."""
     basics = {n2r[n] for n in kb.BASICS if n in n2r}
     top = [t_ for t_ in _top_pairs(tscore, 60)
            if t_[0] not in basics and t_[1] not in basics][:10]
@@ -86,6 +94,7 @@ def fig_tscore_fails():
 
 
 def _strip(ax, key, xlabel, gate=None):
+    """One strip-plot axes: the labelled pairs' values for `key`, grouped by label."""
     groups = [("keep", "real synergy", KEEP_C, "o"),
               ("drop", "no synergy", DROP_C, "s"),
               ("coincidence", "coincidence", COIN_C, "^")]
@@ -104,6 +113,8 @@ def _strip(ax, key, xlabel, gate=None):
 
 
 def fig_product_works():
+    """**Figure 6.** The 22 hand-labelled pairs under t-score and under the product `t x log(1 + lift)`.
+    A strip plot, because the only question is whether the three label groups separate."""
     fig, axes = plt.subplots(1, 2, figsize=(10.6, 3.1))
     _strip(axes[0], "t", "t-score")
     _strip(axes[1], "comb", "synergy score  (t-score x log(1 + lift))")
@@ -118,6 +129,7 @@ def fig_product_works():
 
 
 def fig_jaccard():
+    """**Figure 7.** The same labelled pairs by neighbourhood overlap, with the 0.03 gate drawn on."""
     fig, ax = plt.subplots(figsize=(7.4, 2.9))
     _strip(ax, "jac", "Jaccard overlap of the two cards' neighbourhoods", gate=0.03)
     ax.set_title("Neighbourhood overlap decides what no score could: which pairings are real")
@@ -126,6 +138,8 @@ def fig_jaccard():
 
 
 def fig_staples():
+    """**Figure 8.** Play rate against each card's strongest lift to anything — the staple detector.
+    The shaded box is the exclusion rule that removes the 12 format staples."""
     from figs import _gated_adjacency
     gated = _gated_adjacency(); binary = (gated > 0).tocsr()
     L = lift.tocsr(); max_lift = np.zeros(gated.shape[0])

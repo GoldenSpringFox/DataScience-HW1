@@ -1,5 +1,5 @@
 """Color-corrected soft synergy packages via symmetric NMF over the color-conditioned t-score
-matrix (plan `docs/plans/6.3b-communities-next-iteration.md` step 2, task 6.3-B) -- the answer to
+matrix (plan `docs/plans/archive/6.3b-communities-next-iteration.md` step 2, task 6.3-B) -- the answer to
 that plan's Q1 ("can NMF use the color-identity fix"): not by patching raw-presence NMF's input
 (a card's color-identity legality is *structural* in the deck x card matrix -- a mono-green card
 has literal zero support outside green-legal decks at any column scaling, and non-negativity
@@ -139,6 +139,11 @@ def build_color_conditioned_S(
 
 @dataclass
 class SymNMFFitResult:
+    """One symNMF fit. `H` is the `n x k` non-negative membership matrix (row = card, column =
+    package, entry = how strongly that card belongs). `relative_residual` is `||S - HH^T||_F /
+    ||S||_F`, and `residual_history` is its value per iteration — a curve that has flattened is
+    the evidence `n_iter` was enough."""
+
     H: np.ndarray
     n_iter: int
     relative_residual: float
@@ -220,6 +225,10 @@ def fit_symnmf(
 
 @dataclass
 class KSweepResult:
+    """One point of the `k` sweep — same shape as `nmf_packages.KKSweepResult`, with the residual
+    in place of the reconstruction error and the fit time kept because symNMF at large `k` is the
+    slow step of the pipeline."""
+
     k: int
     relative_residual: float
     stability: float
@@ -260,6 +269,10 @@ def best_k(sweep: list[KSweepResult]) -> KSweepResult:
 
 @dataclass
 class SymNMFBuildStats:
+    """What `build_and_save` did: the card pool narrowing (total -> basic lands excluded -> in
+    pool), the edge count of `S`, the full `k` sweep, and the chosen `k` with its stability,
+    residual and fit time."""
+
     n_cards_total: int
     n_basic_lands_excluded: int
     n_cards_in_pool: int
@@ -349,18 +362,22 @@ def build_and_save(
 
 
 def load_card_memberships(out_dir: Path = KB_DEV_DIR) -> pd.DataFrame:
+    """Long-format card -> package memberships from the saved symNMF fit (the main Q2 artifact)."""
     return pd.read_parquet(out_dir / "symnmf_card_memberships.parquet")
 
 
 def load_components(out_dir: Path = KB_DEV_DIR) -> np.ndarray:
+    """The saved `H` matrix (cards x packages), as fitted."""
     return np.load(out_dir / "symnmf_components.npy")
 
 
 def load_pool_index(out_dir: Path = KB_DEV_DIR) -> pd.DataFrame:
+    """Row index of the saved fit -- which card each pool position is."""
     return pd.read_parquet(out_dir / "symnmf_pool_index.parquet")
 
 
 def load_S(out_dir: Path = KB_DEV_DIR) -> sparse.csr_matrix:
+    """The cached colour-conditioned similarity matrix `S` the fit was run on (expensive to rebuild)."""
     return sparse.load_npz(out_dir / "symnmf_S.npz")
 
 

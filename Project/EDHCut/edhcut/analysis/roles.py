@@ -943,6 +943,10 @@ def unknown_tags(conn: sqlite3.Connection) -> set[str]:
 
 
 def build_and_save(conn: sqlite3.Connection, *, out_dir: Path = KB_DEV_DIR) -> dict[str, object]:
+    """Classify every commander-legal card and write `roles.parquet`. The returned summary is the
+    health check worth reading after a rebuild: how many cards got a secondary role, how many fell
+    through to the `default` role (nothing matched), and how often the two layers agreed where
+    both had an opinion."""
     out_dir.mkdir(parents=True, exist_ok=True)
     roles = assign_roles(conn)
     roles.to_parquet(out_dir / "roles.parquet", index=False)
@@ -955,6 +959,8 @@ def build_and_save(conn: sqlite3.Connection, *, out_dir: Path = KB_DEV_DIR) -> d
 
 
 def load_roles(out_dir: Path = KB_DEV_DIR) -> pd.DataFrame:
+    """`roles.parquet`: one row per commander-legal card with its primary/secondary role and the layer
+    that assigned each."""
     return pd.read_parquet(out_dir / "roles.parquet")
 
 
@@ -1156,6 +1162,7 @@ SPOT_CHECK: tuple[SpotCheckRow, ...] = (
 
 
 def resolve_card(conn: sqlite3.Connection, name: str) -> str | None:
+    """`oracle_id` for a card name (punctuation- and case-insensitive, via `card_names`), or None."""
     row = conn.execute(
         "SELECT oracle_id FROM card_names WHERE name_normalized = ?", (normalize_name(name),)
     ).fetchone()
@@ -1197,6 +1204,9 @@ def evaluate_spot_check(conn: sqlite3.Connection, roles: pd.DataFrame | None = N
 
 
 def spot_check_accuracy(results: pd.DataFrame) -> dict[str, float | int]:
+    """Summarize `evaluate_spot_check`'s per-card table. The honest number is `held_out_accuracy`:
+    accuracy over only the cards *not* used to calibrate the rules — overall `primary_accuracy`
+    includes cards the rules were tuned on and reads optimistically."""
     held_out = results.loc[~results["calibrated"]]
     with_secondary = results.loc[results["expected_secondary"].notna()]
     return {

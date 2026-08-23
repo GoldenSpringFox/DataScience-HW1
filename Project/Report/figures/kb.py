@@ -1,8 +1,22 @@
-"""Shared loader for report figures: rebuilds the gated graph exactly as the notebooks do."""
+"""Shared loader and graph helpers for the report figures — the pieces every figure script needs
+so that all of them describe the *same* card graph the analysis chapters do, rather than each
+re-deriving its own approximation.
+
+`load()` returns the two matrices Question 1 settles on (the near-uniform-weighted,
+colour-conditioned t-score and plain lift) plus the card index and its name/row lookups. Callers
+form the synergy score themselves as `t-score * log(1 + lift)` — the product Question 1 argues for
+— then build the graph with the two helpers below: `sparsify_top_k_union` (keep each card's
+`TOP_K` strongest partners, symmetrise by union) and `jaccard_all` (per-edge neighbourhood
+overlap, gated at `MIN_JACCARD`). `BASICS` and `STAPLES` are the node exclusions that go with it.
+
+Kept identical to the two community notebooks' own §2 on purpose; see `docs/devlog/6.3d`.
+"""
 import numpy as np, pandas as pd, scipy.sparse as sparse
 from pathlib import Path
 
-KB = Path("data/kb/dev")
+# Resolved from this file, not the working directory, so the scripts run from anywhere:
+# Project/Report/figures/ -> Project/EDHCut/data/kb/dev
+KB = Path(__file__).resolve().parents[2] / "EDHCut" / "data" / "kb" / "dev"
 
 BASICS = ["Plains", "Island", "Swamp", "Mountain", "Forest", "Wastes"]
 # the 12 detected format staples (docs/devlog/6.3d), max_lift < 3.5 and playrate >= 10%

@@ -1,3 +1,7 @@
+"""Symmetric NMF (`edhcut.analysis.symnmf_packages`): the residual definition, seed-reproducible
+initialisation, recovery of planted block structure, the `k`-selection rule, and that the
+colour-conditioned `S` is symmetric and package-structured."""
+
 import json
 
 import numpy as np

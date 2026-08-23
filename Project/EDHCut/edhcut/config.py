@@ -26,6 +26,15 @@ COMMANDER_SLOTS: list[list[str]] = [
 
 @dataclass(frozen=True)
 class Paths:
+    """Every path the project uses, derived from one `data_dir` so nothing hardcodes a location.
+    `data_dir` defaults to `Project/EDHCut/data/` (resolved from this file, not the working
+    directory, so the CLI and the notebooks agree wherever they are launched from); point it
+    somewhere else to run the whole pipeline against a different copy of the data.
+
+    `db_path` is the corpus, `http_cache_path` the raw-response cache, `kb_dir` the derived
+    analysis artifacts (`kb/dev/`), `raw_dir` the downloaded bulk files, `logs_dir` the harvest
+    audit logs, and `fixtures_dir` the real decklists the parser tests run against."""
+
     data_dir: Path = PACKAGE_ROOT / "data"
 
     @property

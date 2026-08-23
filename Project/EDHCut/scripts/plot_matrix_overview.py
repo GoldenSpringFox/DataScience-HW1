@@ -75,6 +75,9 @@ def _cmap_and_norm(data: np.ndarray, vmax: float, *, scale: str, center: float |
 
 
 def plot_overview(kind: str, slot: str, *, top_n: int, out_dir: Path, full_scale: str = "linear") -> None:
+    """Write two heatmaps for one matrix (`kind` in cooccur/pmi/lift/tscore, `slot` a scope label):
+    the whole matrix downsampled, and a readable top-`top_n` submatrix. Exploratory output — these
+    images are not report figures."""
     card_index = load_card_index()
     matrix = sparse.load_npz(KB_DEV_DIR / f"{kind}_{slot}.npz")
 

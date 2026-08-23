@@ -22,6 +22,7 @@ SEEDS = [42, 7, 13, 99, 2024]
 
 
 def build_graph():
+    """The gated card graph, built exactly as `kb`/the notebooks build it."""
     ci, tscore, lift, n2r, r2n, dc = kb.load()
     adj, excl = kb.build(ci, tscore, n2r)              # top-15 union, basics+staples out
     binary = (adj > 0).astype(np.int32).tocsr()
@@ -59,6 +60,9 @@ def rewired(S, seed=0):
 
 
 def run(S, label, seeds):
+    """Cluster the graph under several random seeds and report pairwise agreement — the check that
+    the packages are a property of the graph rather than of one lucky seed. Writes
+    `seed_stability.json`, whose numbers are quoted in Question 2."""
     fits = {}
     for s in seeds:
         t0 = time.perf_counter()

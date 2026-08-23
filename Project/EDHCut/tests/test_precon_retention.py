@@ -1,3 +1,7 @@
+"""Precon retention evidence: the deck↔precon trust curve, per-card cut confidence, and the
+quantity-aware overlap/difference counts — including that stacking basic lands cannot inflate the
+difference between a deck and its precon."""
+
 import json
 
 import pytest

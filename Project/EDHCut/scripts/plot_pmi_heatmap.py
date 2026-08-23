@@ -35,6 +35,8 @@ def _resolve_oracle_id(card_name: str) -> str:
 def plot_pmi_heatmap(
     card_name: str, *, slot: str = "global", k: int = 20, out_path: Path
 ) -> None:
+    """Heatmap of one card and its `k` strongest PMI associates, so a single card's neighbourhood
+    can be eyeballed. Exploratory output — not a report figure."""
     seed_id = _resolve_oracle_id(card_name)
     card_index = load_card_index()
     pmi = load_pmi(slot)

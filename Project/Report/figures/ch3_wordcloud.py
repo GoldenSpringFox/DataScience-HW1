@@ -14,7 +14,7 @@ SP = Path(__file__).resolve().parent
 sys.path.insert(0, str(SP))
 from edhcut.config import CONFIG
 
-OUT = Path(r"C:/Aviv/University/Semester 8/Data Science/Homework - Group/Project/Report/Images")
+OUT = Path(__file__).resolve().parents[1] / "Images"   # Project/Report/Images
 
 con = sqlite3.connect(CONFIG.paths.db_path)
 texts = [t for (t,) in con.execute(

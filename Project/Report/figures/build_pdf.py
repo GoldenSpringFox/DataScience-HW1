@@ -7,7 +7,7 @@ import re, subprocess, sys, shutil
 from pathlib import Path
 import markdown
 
-REPORT = Path(r"C:/Aviv/University/Semester 8/Data Science/Homework - Group/Project/Report")
+REPORT = Path(__file__).resolve().parents[1]   # Project/Report
 SOFFICE = r"C:/Program Files/LibreOffice/program/soffice.exe"
 
 CSS = """
@@ -37,6 +37,8 @@ def to_html(md_text, title):
 
 
 def build(md_text, stem, title):
+    """Render `report.md` to PDF via LibreOffice, optionally stripping every figure and its caption
+    (`noimages.pdf`, which is what the page limit is measured against)."""
     html_path = REPORT / f"{stem}.html"
     html_path.write_text(to_html(md_text, title), encoding="utf-8")
     out = subprocess.run([SOFFICE, "--headless", "--convert-to",

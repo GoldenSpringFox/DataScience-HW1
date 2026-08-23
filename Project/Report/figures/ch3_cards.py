@@ -16,8 +16,11 @@ WIDE = 250
 
 
 def neighbours():
+    """**Figure 16.** The query card's nearest neighbours under each signal: text similarity (which
+    returns things you could play *instead*) against co-occurrence (which returns what it is
+    played *with*). Returns both lists so the caller can draw them as card images."""
     ci, tscore, lift, n2r, r2n, dc = kb.load()
-    emb = pd.read_parquet("data/kb/dev/embeddings.parquet")
+    emb = pd.read_parquet(kb.KB / "embeddings.parquet")
     text_cols = [c for c in emb.columns if c.startswith(("tfidf_", "types_", "struct_"))]
     emb = emb[emb["oracle_id"].isin(set(ci["oracle_id"]))].reset_index(drop=True)
     vec = np.array(emb[text_cols].to_numpy(dtype=np.float32), copy=True)

@@ -399,6 +399,11 @@ def _markdown_table(headers: list[str], rows: list[list[Any]]) -> str:
 
 
 def generate_report(conn: sqlite3.Connection) -> str:
+    """Assemble the whole QA report as one markdown string (written to `data/qa_report.md`).
+    Section order is deliberate — deck/pool sizes first, then the checks that must come back empty
+    (deck-size violations, unresolved names), then the cross-source agreement and coverage tables.
+    Each section is built by its own function above; this one only sequences them and formats the
+    tables, so a new check is added by writing a function and appending it here."""
     slots = resolve_slots(conn)
     archidekt_log_path = CONFIG.paths.logs_dir / "archidekt_harvest_log.txt"
     parts = ["# EDHCut QA & Coverage Report\n"]

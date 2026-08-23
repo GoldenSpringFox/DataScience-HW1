@@ -70,6 +70,10 @@ def edge_lift(incidence, card_decks, rows, cols, orig_index):
 
 
 def build():
+    """Rebuild the Question 2 communities from scratch and cache them to `ch2.pkl` — the graph,
+    the symNMF membership matrix, and the generated package names. Run this before any `ch2_*`
+    figure script; it takes ~30s and the rest read the cache. Deliberately mirrors the notebook's
+    own §2 so the figures and the notebook describe the same packages."""
     ci, tscore, lift, n2r, r2n, dc = kb.load()
     with connect(CONFIG.paths.db_path) as conn:
         basics = basic_land_mask(conn, ci)
@@ -141,6 +145,10 @@ def build():
 
 
 def name_communities(cards, tags):
+    """Auto-name each community from the mechanic tags its members carry. A tag earns the name by
+    being both *common* inside the community (`share`) and *unusual* outside it (`lift`); scoring
+    on `share * log(1 + lift)` rather than raw frequency is what stops every community being
+    called "creature". Communities where no tag clears the thresholds stay unnamed."""
     tags = tags[tags["oracle_id"].isin(set(cards["oracle_id"]))].copy()
     assigned = cards[cards["community"] >= 0]
     tags["community"] = tags["oracle_id"].map(dict(zip(assigned["oracle_id"], assigned["community"])))

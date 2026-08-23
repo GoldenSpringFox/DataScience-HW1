@@ -1,3 +1,8 @@
+"""The pairwise-metric core (`edhcut.analysis.cooccurrence`): the precon novelty weighting curve,
+card-pool construction and its row ordering, weighted and unweighted co-occurrence counting, and
+the PMI/lift/t-score formulas — including the colour-conditioned t-score's guarantee that it
+reduces exactly to the pooled value when either card is colourless."""
+
 import math
 
 import numpy as np

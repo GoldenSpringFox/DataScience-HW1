@@ -1,3 +1,7 @@
+"""The earlier plain-NMF package extraction (superseded by `symnmf_packages`, kept for comparison):
+deck sampling determinism, the binary deck × card matrix, topic-stability matching across seeds,
+and the `k`-selection rule."""
+
 import numpy as np
 import pandas as pd
 import pytest

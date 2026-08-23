@@ -1,3 +1,7 @@
+"""Inverse-probability deck weighting: an oversampled commander must end up below weight 1, weights
+must track the commander's true metagame share rather than the raw sample ratio, and the
+near-uniform variant must flatten the harvest's imbalance."""
+
 import pytest
 
 from edhcut.analysis.deck_weights import (

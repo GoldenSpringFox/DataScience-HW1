@@ -8,7 +8,7 @@ import networkx as nx
 
 SP = Path(__file__).resolve().parent
 sys.path.insert(0, str(SP))
-OUT = Path(r"C:/Aviv/University/Semester 8/Data Science/Homework - Group/Project/Report/Images")
+OUT = Path(__file__).resolve().parents[1] / "Images"   # Project/Report/Images
 plt.rcParams.update({"figure.dpi": 150, "savefig.dpi": 150, "savefig.bbox": "tight",
                      "font.size": 9, "figure.facecolor": "white", "axes.facecolor": "white"})
 

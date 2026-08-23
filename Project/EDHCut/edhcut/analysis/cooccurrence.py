@@ -570,6 +570,10 @@ def _slot_label(commander_names: Iterable[str]) -> str:
 
 @dataclass
 class SlotSpec:
+    """One commander slot resolved for matrix-building: its filesystem slug (`label`, e.g.
+    "yoshimaru_bruse_tarl"), the configured card names, and the `slot_key` (the `oracle_id`-based
+    key the `decks` table stores) that selects its decks."""
+
     label: str
     commander_names: list[str]
     slot_key: str
@@ -587,6 +591,11 @@ def configured_slots(conn: sqlite3.Connection) -> list[SlotSpec]:
 
 @dataclass
 class ScopeStats:
+    """Build summary for one scope (the global matrix, or one commander slot): pool size, how many
+    decks fed it, the summed novelty weight, how many card pairs ended up nonzero, and how many
+    survived into PMI after the `MIN_PAIR_COUNT` mask. `pmi_pairs` well below `nnz_pairs` is the
+    expected shape — most pairs co-occur once or twice and are masked as coincidence."""
+
     label: str
     n_cards: int
     deck_count: int
@@ -677,18 +686,22 @@ def build_and_save(
 
 
 def load_card_index(out_dir: Path = KB_DEV_DIR) -> pd.DataFrame:
+    """The shared card->row index every matrix in this module is aligned to."""
     return pd.read_parquet(out_dir / "card_index.parquet")
 
 
 def load_pmi(label: str, out_dir: Path = KB_DEV_DIR) -> sparse.csr_matrix:
+    """Saved PMI matrix for one scope ("global" or a slot label, e.g. "krenko")."""
     return sparse.load_npz(out_dir / f"pmi_{label}.npz")
 
 
 def load_tscore(label: str, out_dir: Path = KB_DEV_DIR) -> sparse.csr_matrix:
+    """Saved (pooled-null) t-score matrix for one scope."""
     return sparse.load_npz(out_dir / f"tscore_{label}.npz")
 
 
 def load_tscore_color(label: str, out_dir: Path = KB_DEV_DIR) -> sparse.csr_matrix:
+    """Saved colour-conditioned t-score matrix for one scope -- the metric the report settles on."""
     return sparse.load_npz(out_dir / f"tscore_color_{label}.npz")
 
 
@@ -731,6 +744,8 @@ def top_associated(
 
 
 def _resolve_card_name(conn: sqlite3.Connection, name: str) -> str:
+    """Resolve a card name to its `oracle_id` for the CLI, exiting with a clear message rather than a
+    traceback if it is unknown."""
     row = conn.execute(
         "SELECT oracle_id FROM card_names WHERE name_normalized = ?", (normalize_name(name),)
     ).fetchone()

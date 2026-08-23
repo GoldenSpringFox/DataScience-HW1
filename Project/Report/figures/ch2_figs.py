@@ -8,7 +8,7 @@ import networkx as nx
 
 SP = Path(__file__).resolve().parent
 sys.path.insert(0, str(SP))
-OUT = Path(r"C:/Aviv/University/Semester 8/Data Science/Homework - Group/Project/Report/Images")
+OUT = Path(__file__).resolve().parents[1] / "Images"   # Project/Report/Images
 
 plt.rcParams.update({
     "figure.dpi": 150, "savefig.dpi": 150, "savefig.bbox": "tight",
@@ -47,7 +47,8 @@ DISPLAY = {
 
 
 def fig_purity():
-    """Colour purity per community against a same-size random null."""
+    """**Figure 14.** Colour purity per community against a same-size random null — the check that
+    the packages are not just colour groupings."""
     assigned = cards[cards["community"] >= 0]
     rng = np.random.default_rng(0)
     pool = assigned["color_identity"].values
@@ -79,6 +80,8 @@ def fig_purity():
 
 
 def fig_seeds():
+    """Seed-stability chart. **Not used in the final writeup** — the numbers are quoted in the text
+    instead (see `seed_stability.py`)."""
     d = json.loads((SP / "seed_stability.json").read_text())
     real_ari = np.mean([r["ari"] for r in d["real"]]); null_ari = np.mean([r["ari"] for r in d["null"]])
     real_tm = np.mean([r["topic_match"] for r in d["real"]]); null_tm = np.mean([r["topic_match"] for r in d["null"]])
@@ -99,7 +102,7 @@ def fig_seeds():
 
 
 def fig_topics_per_card(bin_size=10):
-    """Packages per card against EDHREC rank, in bins of `bin_size` cards."""
+    """**Figure 13.** Packages per card against EDHREC popularity rank, in bins of `bin_size` cards."""
     import sqlite3
     from edhcut.config import CONFIG
     con = sqlite3.connect(CONFIG.paths.db_path)
@@ -136,7 +139,8 @@ def fig_topics_per_card(bin_size=10):
 
 
 def fig_graph():
-    """Force-directed layout of the 18 largest communities."""
+    """**Figure 9.** Force-directed layout of the largest communities — the main visual result of
+    Question 2. Distance on the page is synergy, because edge weight is what pulls cards together."""
     assigned = cards[cards["community"] >= 0]
     named = [c for c in assigned["community"].value_counts().index
              if names.get(c) and "generic" not in names[c]]

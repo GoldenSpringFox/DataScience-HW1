@@ -1,3 +1,7 @@
+"""The recursive package tree: the recursion's stopping conditions, `frontier_at`'s tree cut growing
+monotonically with the requested leaf count, the membership table `cut_at` produces, and the
+save/load round trip."""
+
 import numpy as np
 import pandas as pd
 import pytest

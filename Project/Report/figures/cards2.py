@@ -13,10 +13,11 @@ from edhcut.config import CONFIG
 
 ci, tscore, lift, n2r, r2n, dc = kb.load()
 counts = ci.set_index("row")["deck_count"].sort_index().values
-co = sparse.load_npz("data/kb/dev/cooccur_global.npz").tocsr()
+co = sparse.load_npz(kb.KB / "cooccur_global.npz").tocsr()
 
 
 def _top_pairs(matrix, n, exclude_names=()):
+    """The `n` highest-valued pairs of a symmetric matrix, skipping any pair touching `exclude_names`."""
     excl = {n2r[x] for x in exclude_names if x in n2r}
     m = sparse.triu(matrix, k=1).tocoo()
     out = []
@@ -54,6 +55,7 @@ def pair_panel(rows, title, out, note_fmt):
 
 
 def lift_panel():
+    """The card-image companion to Figure 4 — lift's top pairs, drawn as the actual cards."""
     top = _top_pairs(lift, 4)
     rows = [(r2n[i], r2n[j], float(v), int(co[i, j]), int(counts[i]), int(counts[j]))
             for i, j, v in top]
@@ -67,6 +69,7 @@ def lift_panel():
 
 
 def tscore_panel():
+    """The card-image companion to Figure 5 — t-score's top pairs, drawn as the actual cards."""
     top = _top_pairs(tscore, 4, exclude_names=kb.BASICS)
     rows = [(r2n[i], r2n[j], float(v), int(co[i, j]), int(counts[i]), int(counts[j]))
             for i, j, v in top]
@@ -79,7 +82,10 @@ def tscore_panel():
         print("   ", r)
 
 
-def metric_rows(query="Basalt Monolith", out="cards1_metric_comparison.png"):
+def metric_rows(query="Thornbite Staff", out="cards1_metric_comparison.png"):
+    """**Figure 2.** One row of card images per metric, each showing what that metric answers for the
+    query card. The default query is the card the writeup uses; pass another name to rebuild it
+    for a different example."""
     r = n2r[query]
     cr = co.getrow(r).toarray().ravel()
     lr = lift.getrow(r).toarray().ravel()

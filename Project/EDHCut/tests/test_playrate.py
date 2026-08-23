@@ -1,3 +1,7 @@
+"""Play rates and their eligibility denominator: colour identities canonicalise to WUBRG order, the
+deck-count table always has all 32 identities (zero-filled), and slot scoping and deck weights
+both flow through correctly."""
+
 import json
 
 import pandas as pd

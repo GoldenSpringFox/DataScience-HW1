@@ -1,3 +1,7 @@
+"""Theme/tag ground-truth labels: EDHREC theme slugs matching Tagger tags (including singularisation
+and aliases), label pool size limits, and the Benjamini-Hochberg FDR correction against a
+hand-computed example."""
+
 import json
 
 import numpy as np

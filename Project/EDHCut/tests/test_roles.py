@@ -1,3 +1,7 @@
+"""Functional role classification (`edhcut.analysis.roles`). Two halves: the rule table's own
+invariants (every mapped role is declared, no zero-weight rules, the documented precedence order
+holds) and the classifier's behaviour on real cards, including the held-out spot check."""
+
 import pandas as pd
 import pytest
 

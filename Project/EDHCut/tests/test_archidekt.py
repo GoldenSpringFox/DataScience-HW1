@@ -1,3 +1,7 @@
+"""Archidekt deck parsing: which cards count as part of the 99 (maybeboard, sideboard, tokens and
+category flags are all ways a card can look present but not be), commander detection including
+partner pairs, the embedded-JSON extraction the site's pages need, and the harvest log lines."""
+
 from edhcut.db import connect
 from edhcut.ingest.archidekt import (
     _parse_next_data,

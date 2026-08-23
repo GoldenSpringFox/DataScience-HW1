@@ -1,4 +1,10 @@
-"""Generate Chapter 1 + Data figures for the report."""
+"""SUPERSEDED — the first pass at the Question 1 figures. Every file it writes
+(`fig0_card_popularity`, `fig1_metric_separation`, `fig2_sanguine_bond_partners`,
+`fig3_staple_detector`) was replaced by `figs2.py`'s versions and none appears in the final
+writeup. Kept only as a record of the earlier framing; `figs2.py` is the one to read.
+
+Earlier description: Generate Chapter 1 + Data figures for the report.
+"""
 import sys, json, sqlite3
 from pathlib import Path
 import numpy as np, pandas as pd, scipy.sparse as sparse
@@ -11,7 +17,7 @@ SP = Path(__file__).resolve().parent
 sys.path.insert(0, str(SP))
 import kb
 
-OUT = Path(r"C:/Aviv/University/Semester 8/Data Science/Homework - Group/Project/Report/Images")
+OUT = Path(__file__).resolve().parents[1] / "Images"   # Project/Report/Images
 OUT.mkdir(parents=True, exist_ok=True)
 
 # --- house style -------------------------------------------------------------

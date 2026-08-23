@@ -11,12 +11,13 @@ from edhcut.db import connect
 from edhcut.config import CONFIG
 from edhcut.images import get_card_image
 
-OUT = Path(r"C:/Aviv/University/Semester 8/Data Science/Homework - Group/Project/Report/Images")
+OUT = Path(__file__).resolve().parents[1] / "Images"   # Project/Report/Images
 CARD_W, PAD, LABEL_W = 200, 10, 150
 BG = (255, 255, 255)
 
 
 def _font(size):
+    """The first available bold/regular system font at `size`, falling back to PIL's default."""
     for name in ("seguisb.ttf", "segoeui.ttf", "arial.ttf"):
         try:
             return ImageFont.truetype(name, size)
@@ -26,6 +27,7 @@ def _font(size):
 
 
 def card(conn, name, width=CARD_W):
+    """One card's image, fetched from Scryfall via `edhcut.images` and scaled to `width`."""
     img = get_card_image(conn, name).convert("RGB")
     h = int(img.height * width / img.width)
     return img.resize((width, h), Image.LANCZOS)
@@ -52,9 +54,11 @@ def grid(conn, rows, row_labels, title=None, label_w=LABEL_W):
 
 
 def metric_rows(query="Goblin Sharpshooter", out="cards1_metric_comparison.png"):
+    """Superseded by `cards2.metric_rows`, which writes the same file with the writeup's own query
+    and excludes basic lands. Kept only because the two differ in which pairs they exclude."""
     ci, tscore_w, lift, n2r, r2n, dc = kb.load()
     r = n2r[query]
-    co = sparse.load_npz("data/kb/dev/cooccur_global.npz").tocsr()
+    co = sparse.load_npz(kb.KB / "cooccur_global.npz").tocsr()
     cr = co.getrow(r).toarray().ravel()
     lr = lift.getrow(r).toarray().ravel()
     tr = tscore_w.getrow(r).toarray().ravel()
@@ -84,6 +88,8 @@ def metric_rows(query="Goblin Sharpshooter", out="cards1_metric_comparison.png")
 
 
 def keep_drop_examples():
+    """**Figure 3.** The hand-labelled pair examples: two cards that need each other, two that do the
+    same job (substitutes), and two that merely share decks because both are popular."""
     rows = [
         ["Sanguine Bond", "Exquisite Blood"],
         ["Viscera Seer", "Zulaport Cutthroat"],

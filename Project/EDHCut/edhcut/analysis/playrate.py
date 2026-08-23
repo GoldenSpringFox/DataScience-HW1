@@ -189,6 +189,9 @@ def build_card_play_rates(
 
 
 def build_and_save(conn: sqlite3.Connection, *, out_dir: Path = KB_DEV_DIR) -> dict[str, int]:
+    """Write both play-rate artifacts — `color_identity_deck_counts.parquet` (the 32-row
+    eligibility table) and `card_play_rates.parquet` (one row per card) — and return the row
+    counts for the CLI to print."""
     out_dir.mkdir(parents=True, exist_ok=True)
 
     color_identity_counts = build_color_identity_deck_counts(conn)
@@ -205,14 +208,18 @@ def build_and_save(conn: sqlite3.Connection, *, out_dir: Path = KB_DEV_DIR) -> d
 
 
 def load_color_identity_deck_counts(out_dir: Path = KB_DEV_DIR) -> pd.DataFrame:
+    """The 32-row colour-identity -> deck-count table (the play-rate denominator)."""
     return pd.read_parquet(out_dir / "color_identity_deck_counts.parquet")
 
 
 def load_card_play_rates(out_dir: Path = KB_DEV_DIR) -> pd.DataFrame:
+    """One row per card: decks running it, decks eligible to, and the resulting play rate."""
     return pd.read_parquet(out_dir / "card_play_rates.parquet")
 
 
 def _resolve_card_name(conn: sqlite3.Connection, name: str) -> str:
+    """Resolve a card name to its `oracle_id` for the CLI, exiting with a clear message rather than a
+    traceback if it is unknown."""
     row = conn.execute(
         "SELECT oracle_id FROM card_names WHERE name_normalized = ?", (normalize_name(name),)
     ).fetchone()

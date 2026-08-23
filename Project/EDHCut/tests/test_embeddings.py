@@ -1,3 +1,8 @@
+"""Card embeddings (`edhcut.analysis.embeddings`): mana-cost and power/toughness parsing (hybrid,
+Phyrexian, split and dual-faced cards are each their own trap), decks-as-sentences construction
+and the shuffled corpus's reproducibility, the TF-IDF/SVD text space, and nearest-neighbour
+lookup."""
+
 import re
 from itertools import combinations
 

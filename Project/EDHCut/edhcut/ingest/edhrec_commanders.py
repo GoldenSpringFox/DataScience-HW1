@@ -111,6 +111,9 @@ class CommanderListing:
 
 
 def extract_commander_listings(page_data: dict, *, color_identity: str) -> list[CommanderListing]:
+    """Pull the commander rows out of one EDHREC colour-identity page's embedded JSON. The nesting
+    is theirs, not ours, and entries missing a name or deck count are skipped rather than guessed
+    at."""
     cardlists = page_data.get("container", {}).get("json_dict", {}).get("cardlists") or []
     listings = []
     for cardlist in cardlists:
@@ -287,6 +290,9 @@ def _write_ingest_log(conn: sqlite3.Connection, stats: MetaCommandersStats) -> N
 def run(
     conn: sqlite3.Connection, session: RateLimitedSession | None = None, *, threshold: int = MIN_DECKS_THRESHOLD
 ) -> MetaCommandersStats:
+    """Build the commander metagame ranking that decides how many decks each commander is worth
+    harvesting (task 5.7). Fetches one page per colour identity and refuses to write a partial
+    pool — a missing page would silently bias every sample target derived from it."""
     session = session or get_session("edhrec")
     pool = build_commander_pool(session, threshold=threshold)
     if pool.failed_identities:

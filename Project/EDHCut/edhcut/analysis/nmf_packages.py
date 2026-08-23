@@ -141,6 +141,10 @@ def build_deck_card_matrix(
 
 @dataclass
 class KKSweepResult:
+    """One point of the `k` sweep: the fit's `reconstruction_error` (which falls monotonically with
+    `k` and so cannot choose it) and its `stability` — mean matched-topic cosine agreement across
+    seeds, which can, and does."""
+
     k: int
     reconstruction_error: float
     stability: float
@@ -195,6 +199,10 @@ def best_k(sweep: list[KKSweepResult]) -> KKSweepResult:
 
 @dataclass
 class NMFBuildStats:
+    """What `build_and_save` did: how the deck sample and the card pool were narrowed (the
+    `n_*` fields, in the order the filters apply), the full `k` sweep, and the chosen `k` with the
+    stability and reconstruction error it scored."""
+
     n_decks_total: int
     n_decks_sampled: int
     n_cards_total: int
@@ -343,18 +351,22 @@ def memberships_table(pool: pd.DataFrame, h: np.ndarray) -> pd.DataFrame:
 
 
 def load_card_memberships(out_dir: Path = KB_DEV_DIR) -> pd.DataFrame:
+    """Long-format card -> topic memberships from the saved NMF fit."""
     return pd.read_parquet(out_dir / "nmf_card_memberships.parquet")
 
 
 def load_deck_proportions(out_dir: Path = KB_DEV_DIR) -> pd.DataFrame:
+    """Per-deck topic proportions from the saved NMF fit (one row per training deck)."""
     return pd.read_parquet(out_dir / "nmf_deck_proportions.parquet")
 
 
 def load_components(out_dir: Path = KB_DEV_DIR) -> np.ndarray:
+    """The saved `H` matrix (topics x cards)."""
     return np.load(out_dir / "nmf_components.npy")
 
 
 def load_pool_index(out_dir: Path = KB_DEV_DIR) -> pd.DataFrame:
+    """Row/column index of the saved NMF fit -- which card each pool position is."""
     return pd.read_parquet(out_dir / "nmf_pool_index.parquet")
 
 
