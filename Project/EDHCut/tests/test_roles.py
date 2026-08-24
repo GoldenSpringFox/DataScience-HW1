@@ -68,7 +68,7 @@ def test_no_rule_has_zero_weight():
 
 def test_other_is_the_only_default_and_is_never_scored():
     """`other` comes only from layer 3, so no rule may award it directly -- and it is the only
-    such bucket (`synergy_piece` was dropped in the 2026-08-16 vocabulary revision)."""
+    such bucket (`synergy_piece` was dropped in the 2026-08-23 vocabulary revision)."""
     assert "other" not in TAG_RULES and "other" not in TEXT_RULES
     assert "synergy_piece" not in ROLES
 
@@ -154,7 +154,7 @@ def test_negative_weight_cancels_a_parent_tag():
 
 
 def test_land_denial_and_mass_land_destruction_are_both_stax():
-    """Decided 2026-08-16. Convenient, because Tagger uses one tag for both: `mass-land-denial`
+    """Decided 2026-08-23. Convenient, because Tagger uses one tag for both: `mass-land-denial`
     sits on Winter Orb and on Armageddon alike, and now needs no disambiguation."""
     denial = classify(name="Winter Orb", type_line="Artifact", oracle_text="",
                       tags=["mass-land-denial", "stasis"])
@@ -179,7 +179,7 @@ def test_mass_land_destruction_is_kept_out_of_boardwipe():
 
 
 def test_land_destruction_with_nothing_given_back_is_stax():
-    """Decision 2026-08-16: destroying a land and offering nothing attacks the opponent's ability
+    """Decision 2026-08-23: destroying a land and offering nothing attacks the opponent's ability
     to play, which is stax. Stone Rain and Wasteland."""
     stone_rain = score_tags(["removal-land", "removal-destroy", "spot-removal"])
     assert stone_rain["stax"] > stone_rain["spot_removal"]
@@ -209,7 +209,7 @@ def test_tax_tag_alone_is_not_stax():
 
 
 def test_anthems_score_wincon():
-    """Decided 2026-08-16: a static team pump is how a go-wide deck closes."""
+    """Decided 2026-08-23: a static team pump is how a go-wide deck closes."""
     assert score_tags(["anthem"])["wincon"] >= MIN_ROLE_SCORE
 
 
@@ -336,7 +336,7 @@ def test_secondary_needs_more_than_a_single_incidental_signal():
         tags=["overrun", "gives-trample"],
     )
     assert result.primary == "wincon"
-    # Craterhoof DOES grant trample, and since 2026-08-16 the instruction is to be liberal with
+    # Craterhoof DOES grant trample, and since 2026-08-23 the instruction is to be liberal with
     # secondaries -- one real signal is enough. What must not happen is a *sub*-threshold signal
     # becoming a secondary.
     assert result.secondary == "evasion"
@@ -368,7 +368,7 @@ def test_default_is_other_with_no_tags_at_all():
 
 
 def test_a_plain_small_creature_is_not_board_presence():
-    """Narrowed 2026-08-16: an earlier build gave every creature a floor score and the role
+    """Narrowed 2026-08-23: an earlier build gave every creature a floor score and the role
     swallowed 10,028 cards. A vanilla 2/2 is not what `board_presence` is for."""
     bear = classify(name="Grizzly Bears", type_line="Creature - Bear", oracle_text="",
                     tags=[], power="2", toughness="2")
@@ -413,7 +413,7 @@ def test_a_land_creature_is_still_a_land():
 
 
 # ------------------------------------------------------------------------------------
-# Cross-layer penalties and tag conjunctions (both added 2026-08-16)
+# Cross-layer penalties and tag conjunctions (both added 2026-08-23)
 # ------------------------------------------------------------------------------------
 
 

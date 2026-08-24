@@ -11,7 +11,7 @@ Plan `EDHCut_PLAN.md` task 6.4. Three layers, in the plan's own order:
    tag at all).
 3. **Default**: `other`. Deliberately the *only* default — an earlier build also had a
    `synergy_piece` bucket for "does something, just nothing on our list", dropped at the user's
-   direction (2026-08-16) because a role vocabulary should say what a card does or admit it
+   direction (2026-08-23) because a role vocabulary should say what a card does or admit it
    doesn't know, not hedge in between.
 
 **Why weights instead of first-match-wins.** Real cards carry several role signals at once and
@@ -37,7 +37,7 @@ functional role becomes the *secondary* (Bojuka Bog -> land / graveyard_hate, An
 land / ramp). This is what makes role counts usable as deck quotas in task 6.6 — a land that
 also ramps must not be double-counted out of the mana base.
 
-**Vocabulary revisions, 2026-08-16** (two rounds of user review over the real output).
+**Vocabulary revisions, 2026-08-23** (two rounds of user review over the real output).
 
 Renames: `card_draw`->`draw`, `board_wipe`->`boardwipe`, `evasion_enabler`->`evasion`,
 `stax_tax`->`stax`, `counterspell`->`stack_interaction` (broadened past countering to copying,
@@ -88,7 +88,7 @@ KB_DEV_DIR = CONFIG.paths.kb_dir / "dev"
 # `other` is the layer-3 default and wins only when nothing scored at all.
 ROLES: tuple[str, ...] = (
     "land",
-    # stax > boardwipe > graveyard_hate is a declared precedence (2026-08-16), set against
+    # stax > boardwipe > graveyard_hate is a declared precedence (2026-08-23), set against
     # Decree of Annihilation: it blows up all lands, wipes the board, and exiles every graveyard,
     # and should read in that order.
     "stax",
@@ -133,7 +133,7 @@ BIG_BODY_SCORE = 2.5
 MIN_ROLE_SCORE = 1.0
 
 # A runner-up role needs this much evidence to be recorded as the secondary. Lowered from 1.5 to
-# 1.0 (= `MIN_ROLE_SCORE`) at the user's direction 2026-08-16: **be liberal with secondaries.** A
+# 1.0 (= `MIN_ROLE_SCORE`) at the user's direction 2026-08-23: **be liberal with secondaries.** A
 # secondary is free information — Path to Exile really can ramp you if you point it at your own
 # creature — and the cost of a slightly loose one is much lower than the cost of dropping a real
 # mode. At 1.0 anything good enough to be *a* role at all is good enough to be a second one.
@@ -186,7 +186,7 @@ TAG_RULES: dict[str, dict[str, float]] = {
         "repeatable-impulsive-draw": 1.0,
         "long-term-impulsive-draw": 0.5,
         "impulse": 1.5,
-        # Loot and rummage ARE draw (decision 2026-08-16): one card reaching several others, in
+        # Loot and rummage ARE draw (decision 2026-08-23): one card reaching several others, in
         # the right shell, is card advantage even though hand size does not go up. Faithless
         # Looting, Merfolk Looter, Frantic Search, Thrill of Possibility.
         "loot": 3.0,
@@ -196,7 +196,7 @@ TAG_RULES: dict[str, dict[str, float]] = {
         "card-advantage": 0.5,
         "repeatable-card-advantage": 0.5,
         # Cantrips replace themselves and are card-NEUTRAL, so they are not card advantage
-        # (decision 2026-08-16). `hand-neutral` is the general form of the same objection and is
+        # (decision 2026-08-23). `hand-neutral` is the general form of the same objection and is
         # what also removes Mind Stone and Commander's Sphere -- mana rocks that happen to cash
         # themselves in for a card. Both are large enough to fully cancel `draw` + its
         # corroborators; loot/rummage survive because their own anchors are worth more.
@@ -308,7 +308,7 @@ TAG_RULES: dict[str, dict[str, float]] = {
         "damage-prevention-you": 1.0,
         "damage-prevention-player": 1.0,
         # 4.0, above the `stax` reading these same cards get from "creatures can't attack you
-        # unless..." — pillowfort is defensive first (decision 2026-08-16), with stax as the
+        # unless..." — pillowfort is defensive first (decision 2026-08-23), with stax as the
         # secondary. Ghostly Prison and Propaganda are the cards this is set against.
         "pillowfort": 4.0,
         "prevent-attack": 2.0,
@@ -346,7 +346,7 @@ TAG_RULES: dict[str, dict[str, float]] = {
         "hate-nonbasic-land": 2.0,
         "tax-attack": 1.5,
         "tax-block": 1.0,
-        # **Land destruction is stax, not removal** (decision 2026-08-16), *unless* the card
+        # **Land destruction is stax, not removal** (decision 2026-08-23), *unless* the card
         # replaces what it destroys or could have pointed at something else. Blowing up a land
         # with nothing in return attacks the opponent's ability to play the game, which is what
         # stax is; Ghost Quarter handing back a basic is a trade, which is removal.
@@ -369,7 +369,7 @@ TAG_RULES: dict[str, dict[str, float]] = {
         "alternate-win-condition": 5.0,
         "overrun": 4.0,
         "poison-opponents": 3.0,
-        # Extra turns and extra combats are win conditions, not value (decision 2026-08-16).
+        # Extra turns and extra combats are win conditions, not value (decision 2026-08-23).
         "extra-turn": 3.0,
         "extra-combat-phase": 3.5,
         # **Damage aimed at players closes games.** Impact Tremors, Goblin War Strike, Purphoros.
@@ -382,7 +382,7 @@ TAG_RULES: dict[str, dict[str, float]] = {
         "drain-life": 1.0,
         "burn-creature": -3.0,
         # **A lord is `board_presence` by default, and only a `wincon` when the buff is massive
-        # or comes with evasion** (decision 2026-08-16). `anthem` alone scores less here than in
+        # or comes with evasion** (decision 2026-08-23). `anthem` alone scores less here than in
         # board_presence; paired with `gives-evasion` (Eldrazi Monument, Lord of the Accursed,
         # Jetmir) or with `quadratic` scaling (Coat of Arms, Shared Animosity) it wins.
         # `anthem` on its own is worth less here than in board_presence, so a plain lord is board
@@ -794,7 +794,7 @@ def classify(
     if primary is None:
         # Layer 3, and the only default: `other` means "nothing on our role list fits". An
         # earlier build split this into `synergy_piece` (has some functional tag) vs `other`
-        # (has none); dropped 2026-08-16 -- a role vocabulary should name what a card does or
+        # (has none); dropped 2026-08-23 -- a role vocabulary should name what a card does or
         # admit it doesn't know, and `synergy_piece` was doing neither for 12,841 cards.
         return RoleAssignment(
             primary="other",
@@ -1102,7 +1102,7 @@ SPOT_CHECK: tuple[SpotCheckRow, ...] = (
     ("Darkness", "defensive", None, False),
     ("Solitary Confinement", "defensive", None, True),   # NOT protection: protects the player
     ("Soul Warden", "defensive", None, True),            # NOT stax: `tax` is not a cost
-    # accepted as 50/50 by the user 2026-08-16 -- both readings are defensible, so these are
+    # accepted as 50/50 by the user 2026-08-23 -- both readings are defensible, so these are
     # labeled to the tie-break's own answer and flagged calibrated rather than counted as misses
     ("Teferi's Protection", "defensive", None, True),
     ("Whispersilk Cloak", "protection", "evasion", True),

@@ -1,27 +1,27 @@
 # Task <id> — <title>
 Date: <date> | Status: done
 
-## Goal & hypothesis
-What this step does and what we expected to find/achieve.
+One short paragraph: what this task did, and the headline number or result.
 
-## Data
-Sources touched; concrete volumes (rows, MB, deck counts, card-pool sizes) before/after;
-filtering decisions and their justification.
+## Working notes — ACTIVE
+> Present only while the step is in flight; **delete the whole section when it is finalized.**
+> This is the one place detail is welcome — options being weighed, half-finished measurements,
+> approaches that didn't work, numbers from a run that may not survive. Nothing here is settled.
+> Before deleting it, promote whatever still matters into Decisions / Bugs / Outcome.
 
-## Method & design decisions
-Approach chosen; alternatives considered and why rejected; parameters and how they were
-picked (grids swept, seeds fixed, thresholds and their rationale).
+## Decisions
+- Each bullet is a decision that would be expensive to re-derive — the choice, and the reason it
+  beat the alternative. Skip anything obvious or already visible in the code.
 
-## Evaluation & results
-The criteria defined BEFORE looking at output; the numbers (metrics, coverage %,
-modularity, accuracy vs spot-check set); determinism/stability checks.
+## Bugs
+- Real bugs only: what was wrong, what caused it, how it was caught. Drop this section entirely
+  when there were none. A near-miss or a misleading data quirk belongs here too if it would
+  cost someone a day to rediscover.
 
-## Interesting findings
-Concrete examples worth showing in the final report (e.g. "the Krenko corpus cluster #3 is
-recognizably 'sac outlets'"). Save figures to docs/devlog/figures/ and reference them.
+## Outcome
+Done / superseded / abandoned, plus the test count and anything left open. Two or three lines.
 
-## Impediments
-What broke or surprised us, how it was resolved, what it cost. (Reel Patterns dedicates a
-section to this per chapter — graders value it.)
-
-## Notes for future work
+---
+Keep entries light — outside **Working notes**, which is exempt while it exists.
+Distributions, sweep tables, test inventories, and debugging narration do not belong in the
+settled sections; only the numbers that identify the run or anchor a decision do.

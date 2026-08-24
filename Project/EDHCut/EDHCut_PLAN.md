@@ -732,7 +732,7 @@ Depends on: 5.5.
 > well-known cards with expected roles as a test — report accuracy and tagger-vs-heuristic
 > agreement. 📊 Devlog entry (accuracy numbers, disagreement examples).
 
-> ✅ **Done 2026-08-16** — full detail in `docs/devlog/6.4-functional-roles.md`.
+> ✅ **Done 2026-08-23** — full detail in `docs/devlog/6.4-functional-roles.md`.
 > `edhcut/analysis/roles.py` → `data/kb/dev/roles.parquet`, all **31,830** cards (the whole
 > commander-legal pool, not the 6.3 graph pool — a role is well-defined for a card in zero decks
 > and the recommender must answer for any pasted decklist).
